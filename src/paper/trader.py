@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 
 from ..strategy import position_series
 from .fees import courtage
@@ -41,8 +42,11 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     prices: dict[str, float] = {}
     for a, df in hist.items():
         try:
+            last_close = float(df["close"].iloc[-1])
+            if math.isnan(last_close) or last_close <= 0:
+                continue  # cours manquant : on ne décide/trade pas cet actif ce tour-ci
             wants[a] = bool(position_series(df, **sp).iloc[-1])
-            prices[a] = float(df["close"].iloc[-1])
+            prices[a] = last_close
         except Exception:  # noqa: BLE001
             continue
 
@@ -102,7 +106,7 @@ def account_state(db, svc, chat_id: int):
     value = 0.0
     for p in db.paper_positions(chat_id):
         q = svc.quote(p["asset"])
-        price = q.price if q else p["entry_price"]
+        price = q.price if (q and not math.isnan(q.price)) else p["entry_price"]
         v = p["quantity"] * price
         value += v
         pnl_pct = ((price - p["entry_price"]) / p["entry_price"] * 100) if p["entry_price"] else None

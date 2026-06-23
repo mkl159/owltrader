@@ -35,6 +35,8 @@ def _normalize(df: pd.DataFrame) -> pd.DataFrame:
     )
     keep = [c for c in ("open", "high", "low", "close", "volume") if c in df.columns]
     df = df[keep].dropna(how="all")
+    if "close" in df.columns:
+        df = df[df["close"].notna()]  # jamais de bougie sans cours de clôture
     return _to_utc_index(df)
 
 
@@ -56,6 +58,9 @@ class YFinanceProvider(DataProvider):
             if intra is None or intra.empty:
                 return None
             intra = _to_utc_index(intra)
+            intra = intra[intra["Close"].notna()]  # ignore les bougies sans clôture (NaN)
+            if intra.empty:
+                return None
             last = intra.iloc[-1]
             price = float(last["Close"])
             ts = intra.index[-1].to_pydatetime().astimezone(timezone.utc)
