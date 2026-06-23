@@ -31,8 +31,10 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     sp = strat_params(params)
     fee_pct = paper_cfg.get("frais_pct", 0.20)
     fee_min = paper_cfg.get("frais_min", 1.0)
-    max_pos = int(paper_cfg.get("max_positions", 5))
-    alloc = paper_cfg.get("alloc_pct", 20)
+    # max_positions / alloc viennent du profil d'agressivité ou de l'auto-tuning (params),
+    # sinon de la config par défaut.
+    max_pos = int(params.get("max_positions", paper_cfg.get("max_positions", 5)))
+    alloc = params.get("alloc_pct", paper_cfg.get("alloc_pct", 20))
 
     hist = svc.fetch_histories(universe, period="1y")
     wants: dict[str, bool] = {}

@@ -25,6 +25,14 @@ class SimResult:
     n_trades: int
     win_rate: float
     max_drawdown: float
+    sharpe: float = 0.0
+    cagr: float = 0.0
+    sortino: float = 0.0
+    calmar: float = 0.0
+    volatility: float = 0.0
+    profit_factor: float = 0.0
+    best_trade: float = 0.0
+    worst_trade: float = 0.0
     params: dict = field(default_factory=dict)
 
     @property
@@ -125,6 +133,23 @@ def simulate(
     wins = sum(1 for tr in sells if tr["pnl"] > 0)
     win_rate = wins / len(sells) if sells else 0.0
 
+    # --- Métriques pro ---
+    rets = equity_curve.pct_change().dropna()
+    std = rets.std()
+    downside = rets[rets < 0].std()
+    sharpe = float(rets.mean() / std * (252 ** 0.5)) if std > 0 else 0.0
+    sortino = float(rets.mean() / downside * (252 ** 0.5)) if downside and downside > 0 else 0.0
+    volatility = float(std * (252 ** 0.5)) if std > 0 else 0.0
+    years = max((dates[-1] - dates[0]).days / 365.25, 1e-9)
+    cagr = float((equity_curve.iloc[-1] / capital) ** (1 / years) - 1) if capital > 0 else 0.0
+    calmar = float(cagr / abs(drawdown)) if drawdown < 0 else 0.0
+    gains = sum(tr["pnl"] for tr in sells if tr["pnl"] > 0)
+    losses = -sum(tr["pnl"] for tr in sells if tr["pnl"] < 0)
+    profit_factor = float(gains / losses) if losses > 0 else (gains if gains else 0.0)
+    pnls = [tr["pnl"] for tr in sells]
+    best_trade = float(max(pnls)) if pnls else 0.0
+    worst_trade = float(min(pnls)) if pnls else 0.0
+
     return SimResult(
         capital=capital,
         final_equity=float(equity_curve.iloc[-1]),
@@ -134,6 +159,14 @@ def simulate(
         n_trades=len(trades),
         win_rate=win_rate,
         max_drawdown=float(drawdown),
+        sharpe=round(sharpe, 2),
+        cagr=cagr,
+        sortino=round(sortino, 2),
+        calmar=round(calmar, 2),
+        volatility=volatility,
+        profit_factor=round(profit_factor, 2),
+        best_trade=round(best_trade, 2),
+        worst_trade=round(worst_trade, 2),
         params={"short": short, "long": long, "rsi_entry_max": rsi_entry_max,
                 "rsi_exit": rsi_exit, "max_positions": max_positions, "alloc_pct": alloc_pct},
     )

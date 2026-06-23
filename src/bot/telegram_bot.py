@@ -31,15 +31,18 @@ from ..formatting import (
     digest_block,
     ideas_block,
     movers_block,
+    market_block,
     news_block,
     quote_line,
     sim_block,
     signal_card,
     trade_log,
+    trend_block,
 )
 from ..models import Direction
 from ..news import get_news
 from ..paper import trader
+from ..paper.profiles import AGRESSIVITES, profile
 from ..service import MarketService
 from ..storage import Storage
 from ..symbols import Asset
@@ -67,10 +70,13 @@ HELP = (
     "🤖 *Mode autonome (fictif)*\n"
     "• /auto `1000` — gère 1000 € tout seul (achat/vente, frais inclus)\n"
     "• /bilan — où il en est + graphique\n"
-    "• /simuler — backtest : est-ce rentable ?\n"
-    "• /autotune — ré-régler la stratégie · /reset — remettre à zéro · /stopauto\n\n"
+    "• /simuler — backtest + métriques pro (Sharpe, Sortino, Calmar…)\n"
+    "• /agressivite — prudent / normale / agressif\n"
+    "• /autotune — ré-régler la stratégie · /reset · /stopauto\n\n"
     "💡 *Pistes & marché*\n"
     "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
+    "• /tendance `AAPL` — tendance agrégée (multi-sources)\n"
+    "• /marche — tendance générale du marché\n"
     "• /movers — plus fortes hausses/baisses du jour\n\n"
     "📊 *S'informer*\n"
     "• /prix `AAPL` — dernier cours\n"
@@ -106,6 +112,7 @@ def main_menu() -> InlineKeyboardMarkup:
              InlineKeyboardButton("🧪 Simuler", callback_data="simuler")],
             [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees"),
              InlineKeyboardButton("🚀 Top mouvements", callback_data="movers")],
+            [InlineKeyboardButton("🌍 Tendance marché", callback_data="marche")],
             [InlineKeyboardButton("👁️ Ma watchlist", callback_data="watchlist"),
              InlineKeyboardButton("💼 Portefeuille", callback_data="pf")],
             [InlineKeyboardButton("📈 Performance", callback_data="perf"),
@@ -121,8 +128,9 @@ def auto_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
     if active:
         rows += [
             [InlineKeyboardButton("🛠️ Auto-régler", callback_data="auto_tune"),
-             InlineKeyboardButton("♻️ Reset 1000€", callback_data="auto_reset")],
-            [InlineKeyboardButton("⏸️ Pause", callback_data="auto_stop")],
+             InlineKeyboardButton("🎚️ Agressivité", callback_data="agr_menu")],
+            [InlineKeyboardButton("♻️ Reset 1000€", callback_data="auto_reset"),
+             InlineKeyboardButton("⏸️ Pause", callback_data="auto_stop")],
         ]
     else:
         rows += [[InlineKeyboardButton("🤖 Démarrer avec 1000 €", callback_data="auto_start")]]
@@ -263,6 +271,40 @@ async def movers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🚀 Recherche des plus forts mouvements…")
     m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
     await msg.edit_text(movers_block(m), parse_mode=MD)
+
+
+async def tendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage : /tendance AAPL")
+    raw = Asset.parse(context.args[0]).raw
+    msg = await update.message.reply_text("📊 Agrégation des sources…")
+    t = await asyncio.to_thread(_svc(context).trend, raw)
+    await msg.edit_text(trend_block(t), parse_mode=MD)
+
+
+async def marche(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🌍 Analyse de la tendance générale du marché…")
+    m = await asyncio.to_thread(_svc(context).market_trend, CONFIG.get("univers_scan", []))
+    await msg.edit_text(market_block(m), parse_mode=MD)
+
+
+async def agressivite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if not _db(context).paper_get(chat_id):
+        return await update.message.reply_text("Lance d'abord le mode autonome : /auto 1000")
+    if context.args:
+        name = context.args[0].lower()
+        if name not in AGRESSIVITES:
+            return await update.message.reply_text("Choix : prudent · normale · agressif")
+        _db(context).paper_set_params(chat_id, json.dumps(profile(name)))
+        return await update.message.reply_text(
+            f"🎚️ Agressivité réglée sur *{name}*.\n_{profile(name)}_", parse_mode=MD)
+    await update.message.reply_text(
+        "🎚️ *Agressivité* — choisis :", parse_mode=MD,
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("🛡️ Prudent", callback_data="agr:prudent"),
+             InlineKeyboardButton("⚖️ Normale", callback_data="agr:normale"),
+             InlineKeyboardButton("🔥 Agressif", callback_data="agr:agressif")]]))
 
 
 async def _send_chart(chat_id, context, raw: str):
@@ -581,6 +623,26 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("🚀 Recherche des plus forts mouvements…")
         m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
         return await q.edit_message_text(movers_block(m), parse_mode=MD, reply_markup=back_button())
+    if data == "marche":
+        await q.edit_message_text("🌍 Analyse de la tendance générale du marché…")
+        m = await asyncio.to_thread(_svc(context).market_trend, CONFIG.get("univers_scan", []))
+        return await q.edit_message_text(market_block(m), parse_mode=MD, reply_markup=back_button())
+    if data == "agr_menu":
+        return await q.edit_message_text(
+            "🎚️ *Niveau d'agressivité*\n🛡️ Prudent · ⚖️ Normale · 🔥 Agressif\n"
+            "_Règle le nombre de positions, la part investie et la réactivité._", parse_mode=MD,
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("🛡️ Prudent", callback_data="agr:prudent"),
+                 InlineKeyboardButton("⚖️ Normale", callback_data="agr:normale"),
+                 InlineKeyboardButton("🔥 Agressif", callback_data="agr:agressif")],
+                [InlineKeyboardButton("⬅️ Retour", callback_data="auto_menu")]]))
+    if data.startswith("agr:"):
+        name = data.split(":", 1)[1]
+        if db.paper_get(chat_id):
+            db.paper_set_params(chat_id, json.dumps(profile(name)))
+        return await q.edit_message_text(
+            f"🎚️ Agressivité réglée sur *{name}*.", parse_mode=MD,
+            reply_markup=back_button("auto_menu"))
     if data == "auto_menu":
         acc = db.paper_get(chat_id)
         active = bool(acc and acc.get("active"))
@@ -829,6 +891,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["backtest", "bt"], backtest_cmd))
     app.add_handler(CommandHandler(["graph", "graphique"], graph_cmd))
     app.add_handler(CommandHandler(["movers", "mouvements"], movers_cmd))
+    app.add_handler(CommandHandler(["tendance", "trend"], tendance))
+    app.add_handler(CommandHandler(["marche", "market"], marche))
+    app.add_handler(CommandHandler(["agressivite", "agro"], agressivite))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))
     app.add_handler(CommandHandler("unwatch", unwatch))

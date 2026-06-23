@@ -118,6 +118,21 @@ class MarketService:
         df = self.history(raw, period="1y")
         return should_hold(df, **params) if df is not None else False
 
+    def trend(self, raw: str, with_news: bool = True):
+        """Tendance agrégée d'un actif (indicateurs + sentiment consolidés)."""
+        from .trend import aggregate_trend
+        asset = Asset.parse(raw)
+        df = self.history(asset.raw, period="1y")
+        sentiment = self._news_sentiment(asset.raw) if with_news else None
+        return aggregate_trend(asset.raw, df, sentiment) if df is not None else None
+
+    def market_trend(self, universe: list[str]):
+        """Tendance générale du marché, agrégée sur tout l'univers."""
+        from .trend import aggregate_market, aggregate_trend
+        histories = self.fetch_histories(universe, period="1y")
+        trends = [aggregate_trend(a, df) for a, df in histories.items()]
+        return aggregate_market(trends)
+
     def signal_for(self, raw: str) -> Optional[Signal]:
         """Signal seul (sans cotation séparée) — léger, pour le scan de marché."""
         asset = Asset.parse(raw)

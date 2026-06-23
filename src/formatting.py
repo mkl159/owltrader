@@ -110,20 +110,66 @@ def ideas_block(signals: list[Signal]) -> str:
 
 
 def sim_block(r, devise: str = "EUR") -> str:
-    """Résultat d'une simulation historique du mode autonome."""
+    """Résultat d'une simulation historique du mode autonome, avec métriques pro."""
     if r is None:
         return "🧪 Simulation impossible (données insuffisantes)."
     verdict = "✅ rentable" if r.profit > 0 else "❌ perdant"
     return (
         f"🧪 *Simulation du mode autonome* ({verdict})\n\n"
-        f"💶 Capital de départ : {r.capital:.0f} {devise}\n"
-        f"📊 Valeur finale : *{r.final_equity:.2f} {devise}*\n"
+        f"💶 Départ : {r.capital:.0f} → 📊 *{r.final_equity:.2f} {devise}*\n"
         f"💰 Bénéfice : *{r.profit:+.2f} {devise}* ({r.total_return*100:+.1f}%)\n"
-        f"🔁 Trades : {r.n_trades} · réussite {r.win_rate*100:.0f}%\n"
-        f"🧾 Frais de courtage payés : {r.fees_total:.2f} {devise}\n"
-        f"📉 Perte max (drawdown) : {r.max_drawdown*100:.1f}%\n\n"
+        f"📈 CAGR (annualisé) : {r.cagr*100:+.1f}%\n\n"
+        "*📐 Métriques pro*\n"
+        f"• Sharpe : {r.sharpe:.2f} · Sortino : {r.sortino:.2f} · Calmar : {r.calmar:.2f}\n"
+        f"• Volatilité annuelle : {r.volatility*100:.1f}%\n"
+        f"• Drawdown max : {r.max_drawdown*100:.1f}%\n"
+        f"• Profit factor : {r.profit_factor:.2f}\n"
+        f"• Trades : {r.n_trades} · réussite {r.win_rate*100:.0f}%\n"
+        f"• Meilleur/pire trade : {r.best_trade:+.2f} / {r.worst_trade:+.2f} {devise}\n"
+        f"• Frais payés : {r.fees_total:.2f} {devise}\n\n"
+        f"_Réglages : {r.params}_\n"
         "_⚠️ Performances passées ≠ futures. Simulation fictive, éducative._"
     )
+
+
+def trend_block(t) -> str:
+    """Tendance agrégée d'un actif, avec le détail des sources."""
+    if t is None:
+        return "📊 Tendance indisponible (données insuffisantes)."
+    src = {
+        "SMA50": "Prix vs MM50", "SMA200": "Prix vs MM200", "alignement": "Alignement MM",
+        "MACD": "MACD", "perf_1m": "Perf 1 mois", "perf_3m": "Perf 3 mois",
+        "RSI": "RSI", "pente": "Pente EMA20", "actus": "Sentiment actus",
+    }
+    lines = [
+        f"{t.emoji} *Tendance {t.symbol} : {t.label}*",
+        f"Score agrégé : *{t.score:+.0f}/100*",
+        "",
+        "_Sources agrégées :_",
+    ]
+    for k, v in t.components.items():
+        ic = "🟢" if v > 0 else "🔴" if v < 0 else "⚪"
+        lines.append(f"{ic} {src.get(k, k)}")
+    lines.append("\n_⚠️ Outil éducatif._")
+    return "\n".join(lines)
+
+
+def market_block(m) -> str:
+    """Tendance générale du marché (agrégée sur tout l'univers)."""
+    if m is None:
+        return "🌍 Tendance de marché indisponible."
+    barre = "🟢" * round(m.breadth / 10) + "⚪" * (10 - round(m.breadth / 10))
+    lines = [
+        f"{m.emoji} *Tendance générale du marché : {m.label}*",
+        f"Score moyen : *{m.avg_score:+.0f}/100*",
+        f"Largeur (breadth) : *{m.breadth:.0f}%* haussiers  {barre}",
+        f"🟢 {m.bullish} haussiers · ⚪ {m.neutral} neutres · 🔴 {m.bearish} baissiers  (sur {m.n})",
+        "",
+        "📈 *Plus haussiers* : " + ", ".join(f"{s} ({sc:+.0f})" for s, sc in m.top),
+        "📉 *Plus baissiers* : " + ", ".join(f"{s} ({sc:+.0f})" for s, sc in m.bottom),
+        "\n_⚠️ Outil éducatif — vue d'ensemble, pas une reco._",
+    ]
+    return "\n".join(lines)
 
 
 def autobilan_block(acc: dict, equity: float, holdings: list, trades_today: list) -> str:
