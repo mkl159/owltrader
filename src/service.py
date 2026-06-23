@@ -88,6 +88,36 @@ class MarketService:
     def history(self, raw: str, period: str = "1y"):
         return self.router.get_history(Asset.parse(raw), period=period, interval="1d")
 
+    def fetch_histories(self, universe: list[str], period: str = "2y") -> dict:
+        """Récupère en parallèle l'historique de tout un univers : {actif: df}."""
+        out = {}
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(self.history, raw, period): raw for raw in universe}
+            for fut in as_completed(futures):
+                try:
+                    df = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if df is not None:
+                    out[futures[fut]] = df
+        return out
+
+    def simulate_portfolio(self, universe: list[str], capital: float = 1000.0, **kw):
+        """Simulation historique du mode autonome (preuve de rentabilité + courbe)."""
+        from .paper import simulate
+        return simulate(self.fetch_histories(universe), capital=capital, **kw)
+
+    def optimize_strategy(self, universe: list[str], capital: float = 1000.0, **fixed):
+        """Auto-tuning : meilleurs paramètres sur l'historique. -> (params, SimResult)."""
+        from .paper.optimizer import optimize
+        return optimize(self.fetch_histories(universe), capital=capital, **fixed)
+
+    def should_hold(self, raw: str, **params) -> bool:
+        """Décision live de la stratégie : faut-il détenir cet actif maintenant ?"""
+        from .strategy import should_hold
+        df = self.history(raw, period="1y")
+        return should_hold(df, **params) if df is not None else False
+
     def signal_for(self, raw: str) -> Optional[Signal]:
         """Signal seul (sans cotation séparée) — léger, pour le scan de marché."""
         asset = Asset.parse(raw)

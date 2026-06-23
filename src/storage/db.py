@@ -5,6 +5,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Optional
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 DB_PATH = ROOT / "data" / "owltrader.db"
@@ -42,8 +43,108 @@ class Storage:
                     sensibilite TEXT DEFAULT 'normale',
                     digest INTEGER DEFAULT 1
                 );
+                CREATE TABLE IF NOT EXISTS paper_account (
+                    chat_id INTEGER PRIMARY KEY,
+                    cash REAL, capital REAL, devise TEXT DEFAULT 'EUR',
+                    params TEXT, active INTEGER DEFAULT 1, created_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS paper_positions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER, asset TEXT, quantity REAL,
+                    entry_price REAL, entry_fee REAL, created_at TEXT
+                );
+                CREATE TABLE IF NOT EXISTS paper_trades (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER, asset TEXT, side TEXT, quantity REAL,
+                    price REAL, fee REAL, pnl REAL, ts TEXT
+                );
+                CREATE TABLE IF NOT EXISTS paper_equity (
+                    chat_id INTEGER, day TEXT, equity REAL,
+                    PRIMARY KEY (chat_id, day)
+                );
                 """
             )
+
+    # --- Compte de paper-trading autonome ---
+    def paper_open(self, chat_id: int, capital: float, devise: str = "EUR", params: str | None = None):
+        """Crée OU réinitialise le compte (remet les mises et efface les actions)."""
+        with self._conn() as c:
+            c.execute("DELETE FROM paper_positions WHERE chat_id=?", (chat_id,))
+            c.execute("DELETE FROM paper_trades WHERE chat_id=?", (chat_id,))
+            c.execute("DELETE FROM paper_equity WHERE chat_id=?", (chat_id,))
+            c.execute(
+                "INSERT OR REPLACE INTO paper_account (chat_id, cash, capital, devise, params, active, created_at) "
+                "VALUES (?,?,?,?,?,1,?)",
+                (chat_id, capital, capital, devise, params,
+                 datetime.now(timezone.utc).isoformat()),
+            )
+
+    def paper_get(self, chat_id: int) -> Optional[dict]:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM paper_account WHERE chat_id=?", (chat_id,)).fetchone()
+        return dict(row) if row else None
+
+    def paper_set_cash(self, chat_id: int, cash: float):
+        with self._conn() as c:
+            c.execute("UPDATE paper_account SET cash=? WHERE chat_id=?", (cash, chat_id))
+
+    def paper_set_params(self, chat_id: int, params: str):
+        with self._conn() as c:
+            c.execute("UPDATE paper_account SET params=? WHERE chat_id=?", (params, chat_id))
+
+    def paper_set_active(self, chat_id: int, active: int):
+        with self._conn() as c:
+            c.execute("UPDATE paper_account SET active=? WHERE chat_id=?", (active, chat_id))
+
+    def paper_active_chats(self) -> list[int]:
+        with self._conn() as c:
+            rows = c.execute("SELECT chat_id FROM paper_account WHERE active=1").fetchall()
+        return [r["chat_id"] for r in rows]
+
+    def paper_positions(self, chat_id: int) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM paper_positions WHERE chat_id=?", (chat_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def paper_add_position(self, chat_id: int, asset: str, qty: float, price: float, fee: float):
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO paper_positions (chat_id, asset, quantity, entry_price, entry_fee, created_at) "
+                "VALUES (?,?,?,?,?,?)",
+                (chat_id, asset, qty, price, fee, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def paper_remove_position(self, chat_id: int, asset: str):
+        with self._conn() as c:
+            c.execute("DELETE FROM paper_positions WHERE chat_id=? AND asset=?", (chat_id, asset))
+
+    def paper_record_trade(self, chat_id: int, asset: str, side: str, qty: float,
+                           price: float, fee: float, pnl: float = 0.0):
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO paper_trades (chat_id, asset, side, quantity, price, fee, pnl, ts) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (chat_id, asset, side, qty, price, fee, pnl, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def paper_trades_since(self, chat_id: int, since_iso: str) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT * FROM paper_trades WHERE chat_id=? AND ts>=? ORDER BY ts", (chat_id, since_iso)
+            ).fetchall()
+        return [dict(r) for r in rows]
+
+    def paper_record_equity(self, chat_id: int, equity: float):
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO paper_equity VALUES (?,?,?)", (chat_id, day, equity))
+
+    def paper_equity_curve(self, chat_id: int) -> list[tuple[str, float]]:
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT day, equity FROM paper_equity WHERE chat_id=? ORDER BY day", (chat_id,)
+            ).fetchall()
+        return [(r["day"], r["equity"]) for r in rows]
 
     # --- Réglages par utilisateur ---
     def get_settings(self, chat_id: int) -> dict:

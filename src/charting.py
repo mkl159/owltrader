@@ -43,3 +43,38 @@ def make_chart(symbol: str, df, lookback: int = 180) -> str | None:
     fig.savefig(out, dpi=110)
     plt.close(fig)
     return str(out)
+
+
+def make_equity_chart(equity, capital: float, title: str = "Évolution du capital",
+                      name: str = "equity") -> str | None:
+    """Courbe d'évolution du capital (équity) vs capital de départ. equity: Series ou liste de (x,y)."""
+    import pandas as pd
+
+    if equity is None:
+        return None
+    if not isinstance(equity, pd.Series):
+        if not equity:
+            return None
+        idx = [pd.to_datetime(x) for x, _ in equity]
+        equity = pd.Series([y for _, y in equity], index=idx)
+    if len(equity) < 2:
+        return None
+
+    fig, ax = plt.subplots(figsize=(9, 4.5))
+    final = float(equity.iloc[-1])
+    color = "#2ca02c" if final >= capital else "#d62728"
+    ax.plot(equity.index, equity.values, color=color, linewidth=1.6, label="Capital")
+    ax.axhline(capital, color="gray", linestyle="--", linewidth=0.9, label=f"Départ ({capital:.0f})")
+    ax.fill_between(equity.index, capital, equity.values,
+                    where=(equity.values >= capital), color="#2ca02c", alpha=0.12)
+    ax.fill_between(equity.index, capital, equity.values,
+                    where=(equity.values < capital), color="#d62728", alpha=0.12)
+    profit = final - capital
+    ax.set_title(f"{title} — {final:.0f} € ({profit:+.0f} €)", fontsize=12, fontweight="bold")
+    ax.legend(loc="upper left", fontsize=8)
+    ax.grid(alpha=0.25)
+    fig.tight_layout()
+    out = Path(tempfile.gettempdir()) / f"owltrader_{name}.png"
+    fig.savefig(out, dpi=110)
+    plt.close(fig)
+    return str(out)

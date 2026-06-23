@@ -28,6 +28,15 @@ DEFAULTS = {
         "FX:EURUSD",
     ],
     "frequences": {"actions": 15},  # minutes
+    # Paramètres du mode autonome (paper-trading fictif)
+    "paper": {
+        "capital": 1000,
+        "frais_pct": 0.20,      # frais de courtage en % par transaction (achat ET vente)
+        "frais_min": 1.0,       # frais minimum par transaction
+        "max_positions": 5,     # nombre max de positions simultanées
+        "alloc_pct": 20,        # % du capital investi par position
+        "devise": "EUR",
+    },
     "signaux": {
         "rsi_survente": 30,
         "rsi_surachat": 70,

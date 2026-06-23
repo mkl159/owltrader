@@ -109,6 +109,67 @@ def ideas_block(signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
+def sim_block(r, devise: str = "EUR") -> str:
+    """Résultat d'une simulation historique du mode autonome."""
+    if r is None:
+        return "🧪 Simulation impossible (données insuffisantes)."
+    verdict = "✅ rentable" if r.profit > 0 else "❌ perdant"
+    return (
+        f"🧪 *Simulation du mode autonome* ({verdict})\n\n"
+        f"💶 Capital de départ : {r.capital:.0f} {devise}\n"
+        f"📊 Valeur finale : *{r.final_equity:.2f} {devise}*\n"
+        f"💰 Bénéfice : *{r.profit:+.2f} {devise}* ({r.total_return*100:+.1f}%)\n"
+        f"🔁 Trades : {r.n_trades} · réussite {r.win_rate*100:.0f}%\n"
+        f"🧾 Frais de courtage payés : {r.fees_total:.2f} {devise}\n"
+        f"📉 Perte max (drawdown) : {r.max_drawdown*100:.1f}%\n\n"
+        "_⚠️ Performances passées ≠ futures. Simulation fictive, éducative._"
+    )
+
+
+def autobilan_block(acc: dict, equity: float, holdings: list, trades_today: list) -> str:
+    """Bilan du compte autonome : valeur, bénéfice, positions, actions du jour."""
+    dev = acc.get("devise", "EUR")
+    cap = acc["capital"]
+    profit = equity - cap
+    emoji = "🟢" if profit >= 0 else "🔴"
+    lines = [
+        f"{emoji} *Bilan du portefeuille autonome*",
+        f"💶 Valeur : *{equity:.2f} {dev}*  (départ {cap:.0f})",
+        f"💰 Bénéfice : *{profit:+.2f} {dev}* ({profit/cap*100:+.1f}%)",
+        f"💵 Liquidités : {acc['cash']:.2f} {dev}",
+        "",
+    ]
+    if holdings:
+        lines.append("📦 *Positions détenues*")
+        for h in holdings:
+            pnl = h.get("pnl_pct")
+            tag = f" ({pnl:+.1f}%)" if pnl is not None else ""
+            lines.append(f"• {h['asset']} : {h['value']:.2f} {dev}{tag}")
+    else:
+        lines.append("📦 Aucune position (tout en liquidités).")
+    if trades_today:
+        lines.append("\n📝 *Actions du jour*")
+        for t in trades_today:
+            ic = "🟢 ACHAT" if t["side"] == "ACHAT" else "🔴 VENTE"
+            pnl = f" · P&L {t['pnl']:+.2f}" if t["side"] == "VENTE" else ""
+            lines.append(f"{ic} {t['asset']} : {t['quantity']:.4g} @ {t['price']:.2f} (frais {t['fee']:.2f}){pnl}")
+    else:
+        lines.append("\n📝 Aucune action aujourd'hui (surveillance).")
+    lines.append("\n_⚠️ Trading fictif — aucune transaction réelle._")
+    return "\n".join(lines)
+
+
+def trade_log(side: str, asset: str, qty: float, price: float, fee: float,
+              pnl: float | None = None, devise: str = "EUR") -> str:
+    """Message court loggué dans le chat à chaque achat/vente autonome."""
+    if side == "ACHAT":
+        return (f"🟢 *ACHAT* {asset}\n{qty:.4g} @ {price:.2f} {devise} "
+                f"(frais {fee:.2f} {devise})")
+    pnl_txt = f"\nRésultat : *{pnl:+.2f} {devise}*" if pnl is not None else ""
+    return (f"🔴 *VENTE* {asset}\n{qty:.4g} @ {price:.2f} {devise} "
+            f"(frais {fee:.2f} {devise}){pnl_txt}")
+
+
 def backtest_block(r) -> str:
     """Résultat de backtest, clair et synthétique."""
     if r is None:

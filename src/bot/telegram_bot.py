@@ -10,6 +10,7 @@ Tout se pilote depuis Telegram :
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
@@ -22,19 +23,23 @@ from telegram.ext import (
 )
 
 from ..config import CONFIG, get_secret
-from ..charting import make_chart
+from ..charting import make_chart, make_equity_chart
 from ..formatting import (
     analysis_full,
+    autobilan_block,
     backtest_block,
     digest_block,
     ideas_block,
     movers_block,
     news_block,
     quote_line,
+    sim_block,
     signal_card,
+    trade_log,
 )
 from ..models import Direction
 from ..news import get_news
+from ..paper import trader
 from ..service import MarketService
 from ..storage import Storage
 from ..symbols import Asset
@@ -59,6 +64,11 @@ WELCOME = (
 
 HELP = (
     "🦉 *OwlTrader — commandes*\n\n"
+    "🤖 *Mode autonome (fictif)*\n"
+    "• /auto `1000` — gère 1000 € tout seul (achat/vente, frais inclus)\n"
+    "• /bilan — où il en est + graphique\n"
+    "• /simuler — backtest : est-ce rentable ?\n"
+    "• /autotune — ré-régler la stratégie · /reset — remettre à zéro · /stopauto\n\n"
     "💡 *Pistes & marché*\n"
     "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
     "• /movers — plus fortes hausses/baisses du jour\n\n"
@@ -92,6 +102,8 @@ def _db(context) -> Storage:
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("🤖 Mode autonome", callback_data="auto_menu"),
+             InlineKeyboardButton("🧪 Simuler", callback_data="simuler")],
             [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees"),
              InlineKeyboardButton("🚀 Top mouvements", callback_data="movers")],
             [InlineKeyboardButton("👁️ Ma watchlist", callback_data="watchlist"),
@@ -102,6 +114,21 @@ def main_menu() -> InlineKeyboardMarkup:
              InlineKeyboardButton("❓ Aide", callback_data="help")],
         ]
     )
+
+
+def auto_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton("📊 Bilan + graphique", callback_data="auto_bilan")]] if active else []
+    if active:
+        rows += [
+            [InlineKeyboardButton("🛠️ Auto-régler", callback_data="auto_tune"),
+             InlineKeyboardButton("♻️ Reset 1000€", callback_data="auto_reset")],
+            [InlineKeyboardButton("⏸️ Pause", callback_data="auto_stop")],
+        ]
+    else:
+        rows += [[InlineKeyboardButton("🤖 Démarrer avec 1000 €", callback_data="auto_start")]]
+    rows.append([InlineKeyboardButton("🧪 Simuler d'abord", callback_data="simuler")])
+    rows.append([InlineKeyboardButton("⬅️ Retour", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def ideas_keyboard(signals) -> InlineKeyboardMarkup:
@@ -245,6 +272,153 @@ async def _send_chart(chat_id, context, raw: str):
         return await context.bot.send_message(chat_id, "📈 Pas assez de données pour un graphique.")
     with open(path, "rb") as f:
         await context.bot.send_photo(chat_id, photo=f, caption=f"📈 {raw}")
+
+
+# --------------------------------------------------------------------------- #
+#  Mode autonome (paper-trading fictif)
+# --------------------------------------------------------------------------- #
+def _paper_cfg() -> dict:
+    return CONFIG.get("paper", {})
+
+
+def _universe() -> list[str]:
+    return CONFIG.get("univers_scan", [])
+
+
+async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/auto [montant] — démarre (ou redémarre) la gestion autonome avec un capital fictif."""
+    cfg = _paper_cfg()
+    capital = cfg.get("capital", 1000)
+    if context.args:
+        try:
+            capital = float(context.args[0].replace(",", "."))
+        except ValueError:
+            return await update.message.reply_text("Montant invalide. Ex : /auto 1000")
+    chat_id = update.effective_chat.id
+    _db(context).paper_open(chat_id, capital, cfg.get("devise", "EUR"))
+    await update.message.reply_text(
+        f"🤖 *Mode autonome activé* avec *{capital:.0f} {cfg.get('devise','EUR')}* fictifs.\n\n"
+        "Je vais acheter/vendre tout seul selon ma stratégie (auto-ajustée), "
+        "frais de courtage inclus, et te *logguer chaque action* ici.\n"
+        "• /bilan — voir où j'en suis (+ graphique)\n"
+        "• /reset — remettre les mises à zéro\n"
+        "• /stopauto — mettre en pause\n\n"
+        "_⏳ Premier tour de marché en cours…_",
+        parse_mode=MD,
+    )
+    await _run_auto_cycle(chat_id, context, announce=True)
+
+
+async def reset_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/reset [montant] — réinitialise les mises et efface toutes les actions."""
+    cfg = _paper_cfg()
+    acc = _db(context).paper_get(update.effective_chat.id)
+    capital = acc["capital"] if acc else cfg.get("capital", 1000)
+    if context.args:
+        try:
+            capital = float(context.args[0].replace(",", "."))
+        except ValueError:
+            return await update.message.reply_text("Montant invalide. Ex : /reset 1000")
+    _db(context).paper_open(update.effective_chat.id, capital, cfg.get("devise", "EUR"))
+    await update.message.reply_text(
+        f"♻️ *Réinitialisé.* Capital remis à *{capital:.0f} {cfg.get('devise','EUR')}*, "
+        "positions et historique effacés.", parse_mode=MD)
+
+
+async def stop_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    acc = _db(context).paper_get(update.effective_chat.id)
+    if not acc:
+        return await update.message.reply_text("Aucun compte autonome. Lance /auto 1000")
+    _db(context).paper_set_active(update.effective_chat.id, 0)
+    await update.message.reply_text("⏸️ Mode autonome en pause. /auto pour relancer.")
+
+
+async def bilan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await _send_bilan(update.effective_chat.id, context)
+
+
+async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    cfg = _paper_cfg()
+    msg = await update.message.reply_text("🧪 Simulation historique en cours (2 ans)…")
+    r = await asyncio.to_thread(
+        _svc(context).simulate_portfolio, _universe(), cfg.get("capital", 1000),
+        fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
+        max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
+    )
+    await msg.edit_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD)
+    if r is not None:
+        path = await asyncio.to_thread(
+            make_equity_chart, r.equity_curve, r.capital, "Simulation du mode autonome", "sim")
+        if path:
+            with open(path, "rb") as f:
+                await context.bot.send_photo(update.effective_chat.id, photo=f,
+                                             caption="📈 Évolution simulée du capital")
+
+
+async def autotune(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🛠️ Auto-réglage des paramètres sur l'historique…")
+    res = await _autotune_universe(context)
+    if res is None:
+        return await msg.edit_text("Auto-réglage impossible (données insuffisantes).")
+    params, r = res
+    # applique au compte de l'utilisateur s'il en a un
+    if _db(context).paper_get(update.effective_chat.id):
+        _db(context).paper_set_params(update.effective_chat.id, json.dumps(params))
+    await msg.edit_text(
+        f"🛠️ *Paramètres auto-réglés* : {params}\n"
+        f"Sur 2 ans : *{r.total_return*100:+.1f}%* (DD {r.max_drawdown*100:.1f}%).\n"
+        "_Appliqués au mode autonome._", parse_mode=MD)
+
+
+async def _autotune_universe(context):
+    cfg = _paper_cfg()
+    return await asyncio.to_thread(
+        _svc(context).optimize_strategy, _universe(), cfg.get("capital", 1000),
+        fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
+        max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
+    )
+
+
+async def _run_auto_cycle(chat_id, context, announce: bool = False):
+    """Exécute un cycle autonome pour un chat et logge les actions dans la conversation."""
+    db = _db(context)
+    svc = _svc(context)
+    executed = await asyncio.to_thread(trader.run_cycle, db, svc, chat_id, _universe(), _paper_cfg())
+    dev = _paper_cfg().get("devise", "EUR")
+    for tr in executed:
+        await context.bot.send_message(
+            chat_id,
+            trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
+                      tr.get("pnl") if tr["side"] == "VENTE" else None, dev),
+            parse_mode=MD,
+        )
+    # enregistre un point d'équity
+    _, equity, _ = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+    db.paper_record_equity(chat_id, equity)
+    if announce and not executed:
+        await context.bot.send_message(
+            chat_id, "👁️ Aucun achat ce tour-ci (rien d'assez intéressant). Je surveille et j'agirai dès qu'un signal sort.")
+
+
+async def _send_bilan(chat_id, context):
+    db = _db(context)
+    svc = _svc(context)
+    acc = db.paper_get(chat_id)
+    if not acc:
+        return await context.bot.send_message(chat_id, "Aucun compte autonome. Lance /auto 1000")
+    acc, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+    from datetime import datetime, timezone
+    since = datetime.now(timezone.utc).strftime("%Y-%m-%dT00:00:00+00:00")
+    trades_today = db.paper_trades_since(chat_id, since)
+    db.paper_record_equity(chat_id, equity)
+    await context.bot.send_message(chat_id, autobilan_block(acc, equity, holdings, trades_today),
+                                   parse_mode=MD)
+    curve = db.paper_equity_curve(chat_id)
+    path = await asyncio.to_thread(make_equity_chart, curve, acc["capital"],
+                                   "Mon portefeuille autonome", f"bilan_{chat_id}")
+    if path:
+        with open(path, "rb") as f:
+            await context.bot.send_photo(chat_id, photo=f, caption="📈 Évolution de ton capital")
 
 
 async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -407,6 +581,57 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("🚀 Recherche des plus forts mouvements…")
         m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
         return await q.edit_message_text(movers_block(m), parse_mode=MD, reply_markup=back_button())
+    if data == "auto_menu":
+        acc = db.paper_get(chat_id)
+        active = bool(acc and acc.get("active"))
+        txt = ("🤖 *Mode autonome* — actif.\nJe trade tout seul un capital fictif, frais inclus."
+               if active else
+               "🤖 *Mode autonome*\nJe gère un capital *fictif* tout seul (achat/vente, frais de "
+               "courtage, auto-réglage) et je te logue chaque action.\n\n_Conseil : lance d'abord une simulation._")
+        return await q.edit_message_text(txt, parse_mode=MD, reply_markup=auto_menu_keyboard(active))
+    if data == "auto_start":
+        cfg = _paper_cfg()
+        db.paper_open(chat_id, cfg.get("capital", 1000), cfg.get("devise", "EUR"))
+        await q.edit_message_text("🤖 *Mode autonome activé* (1000 € fictifs). Premier tour…", parse_mode=MD)
+        return await _run_auto_cycle(chat_id, context, announce=True)
+    if data == "auto_bilan":
+        await q.edit_message_text("📊 Préparation du bilan…")
+        return await _send_bilan(chat_id, context)
+    if data == "auto_reset":
+        cfg = _paper_cfg()
+        db.paper_open(chat_id, cfg.get("capital", 1000), cfg.get("devise", "EUR"))
+        return await q.edit_message_text("♻️ Réinitialisé à 1000 €, positions et historique effacés.",
+                                         reply_markup=back_button("auto_menu"))
+    if data == "auto_stop":
+        db.paper_set_active(chat_id, 0)
+        return await q.edit_message_text("⏸️ Mode autonome en pause.", reply_markup=back_button("auto_menu"))
+    if data == "auto_tune":
+        await q.edit_message_text("🛠️ Auto-réglage en cours…")
+        res = await _autotune_universe(context)
+        if res is None:
+            return await q.edit_message_text("Auto-réglage impossible.", reply_markup=back_button("auto_menu"))
+        params, r = res
+        if db.paper_get(chat_id):
+            db.paper_set_params(chat_id, json.dumps(params))
+        return await q.edit_message_text(
+            f"🛠️ *Réglé* : {params}\nBacktest 2 ans : {r.total_return*100:+.1f}% (DD {r.max_drawdown*100:.1f}%).",
+            parse_mode=MD, reply_markup=back_button("auto_menu"))
+    if data == "simuler":
+        await q.edit_message_text("🧪 Simulation historique (2 ans)…")
+        cfg = _paper_cfg()
+        r = await asyncio.to_thread(
+            _svc(context).simulate_portfolio, _universe(), cfg.get("capital", 1000),
+            fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
+            max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20))
+        await q.edit_message_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD,
+                                  reply_markup=back_button("auto_menu"))
+        if r is not None:
+            path = await asyncio.to_thread(make_equity_chart, r.equity_curve, r.capital,
+                                           "Simulation du mode autonome", "sim")
+            if path:
+                with open(path, "rb") as f:
+                    await context.bot.send_photo(chat_id, photo=f, caption="📈 Évolution simulée")
+        return
     if data.startswith("graph:"):
         raw = data.split(":", 1)[1]
         return await _send_chart(chat_id, context, raw)
@@ -535,6 +760,52 @@ async def digest_job(context: ContextTypes.DEFAULT_TYPE):
             log.warning("Digest %s : %s", chat_id, e)
 
 
+async def auto_trade_job(context: ContextTypes.DEFAULT_TYPE):
+    """Fait trader les comptes autonomes et logge chaque action dans le chat."""
+    db: Storage = context.application.bot_data["db"]
+    for chat_id in db.paper_active_chats():
+        try:
+            await _run_auto_cycle(chat_id, context)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Auto-trade %s : %s", chat_id, e)
+
+
+async def auto_bilan_job(context: ContextTypes.DEFAULT_TYPE):
+    """Bilan quotidien du mode autonome (valeur, bénéfice, actions du jour, graphique)."""
+    db: Storage = context.application.bot_data["db"]
+    for chat_id in db.paper_active_chats():
+        try:
+            await _send_bilan(chat_id, context)
+        except Exception as e:  # noqa: BLE001
+            log.warning("Bilan auto %s : %s", chat_id, e)
+
+
+async def autotune_job(context: ContextTypes.DEFAULT_TYPE):
+    """S'ajuste tout seul : ré-optimise la stratégie et l'applique aux comptes actifs."""
+    db: Storage = context.application.bot_data["db"]
+    actives = db.paper_active_chats()
+    if not actives:
+        return
+    try:
+        res = await _autotune_universe(context)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Autotune : %s", e)
+        return
+    if res is None:
+        return
+    params, r = res
+    for chat_id in actives:
+        db.paper_set_params(chat_id, json.dumps(params))
+        try:
+            await context.bot.send_message(
+                chat_id,
+                f"🛠️ *Stratégie ré-ajustée automatiquement* : {params}\n"
+                f"_Backtest 2 ans : {r.total_return*100:+.1f}% (DD {r.max_drawdown*100:.1f}%)._",
+                parse_mode=MD)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 # --------------------------------------------------------------------------- #
 #  Construction de l'application
 # --------------------------------------------------------------------------- #
@@ -567,12 +838,22 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("perf", perf))
     app.add_handler(CommandHandler("reglages", reglages))
     app.add_handler(CommandHandler("digest", digest_cmd))
+    app.add_handler(CommandHandler(["auto", "autonome"], auto))
+    app.add_handler(CommandHandler(["reset", "reinit"], reset_auto))
+    app.add_handler(CommandHandler(["stopauto", "pause"], stop_auto))
+    app.add_handler(CommandHandler("bilan", bilan))
+    app.add_handler(CommandHandler(["simuler", "simulation"], simuler))
+    app.add_handler(CommandHandler(["autotune", "regler"], autotune))
     app.add_handler(CallbackQueryHandler(on_button))
 
     freq_min = CONFIG.get("frequences", {}).get("actions", 15)
     app.job_queue.run_repeating(surveiller_job, interval=freq_min * 60, first=30)
     app.job_queue.run_repeating(portefeuille_job, interval=freq_min * 60, first=90)
-    # Digest quotidien à 8h (heure du serveur)
+    # Trading autonome : toutes les heures (la stratégie décide sur bougie journalière)
+    app.job_queue.run_repeating(auto_trade_job, interval=3600, first=120)
+    # Digest + bilan autonome + auto-réglage quotidiens (heure du serveur)
     from datetime import time as dtime
     app.job_queue.run_daily(digest_job, time=dtime(hour=8, minute=0))
+    app.job_queue.run_daily(auto_bilan_job, time=dtime(hour=18, minute=0))
+    app.job_queue.run_daily(autotune_job, time=dtime(hour=7, minute=0))
     return app
