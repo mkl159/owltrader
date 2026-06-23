@@ -29,6 +29,7 @@ from ..formatting import (
     autobilan_block,
     backtest_block,
     digest_block,
+    fmt_params,
     ideas_block,
     movers_block,
     market_block,
@@ -299,7 +300,7 @@ async def agressivite(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return await update.message.reply_text("Choix : prudent · normale · agressif")
         _db(context).paper_set_params(chat_id, json.dumps(profile(name)))
         return await update.message.reply_text(
-            f"🎚️ Agressivité réglée sur *{name}*.\n_{profile(name)}_", parse_mode=MD)
+            f"🎚️ Agressivité réglée sur *{name}*.\n⚙️ {fmt_params(profile(name))}", parse_mode=MD)
     await update.message.reply_text(
         "🎚️ *Agressivité* — choisis :", parse_mode=MD,
         reply_markup=InlineKeyboardMarkup([
@@ -409,7 +410,7 @@ async def autotune(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if _db(context).paper_get(update.effective_chat.id):
         _db(context).paper_set_params(update.effective_chat.id, json.dumps(params))
     await msg.edit_text(
-        f"🛠️ *Paramètres auto-réglés* : {params}\n"
+        f"🛠️ *Paramètres auto-réglés*\n⚙️ {fmt_params(params)}\n"
         f"Sur 2 ans : *{r.total_return*100:+.1f}%* (DD {r.max_drawdown*100:.1f}%).\n"
         "_Appliqués au mode autonome._", parse_mode=MD)
 
@@ -689,7 +690,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if db.paper_get(chat_id):
             db.paper_set_params(chat_id, json.dumps(params))
         return await q.edit_message_text(
-            f"🛠️ *Réglé* : {params}\nBacktest 2 ans : {r.total_return*100:+.1f}% (DD {r.max_drawdown*100:.1f}%).",
+            f"🛠️ *Réglé*\n⚙️ {fmt_params(params)}\n"
+            f"Backtest 2 ans : {r.total_return*100:+.1f}% (DD {r.max_drawdown*100:.1f}%).",
             parse_mode=MD, reply_markup=back_button("auto_menu"))
     if data == "simuler":
         await q.edit_message_text("🧪 Simulation historique (2 ans)…")
@@ -874,7 +876,7 @@ async def autotune_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             await context.bot.send_message(
                 chat_id,
-                f"🛠️ *Stratégie ré-ajustée automatiquement* : {params}\n"
+                f"🛠️ *Stratégie ré-ajustée automatiquement*\n⚙️ {fmt_params(params)}\n"
                 f"_Backtest 2 ans : {r.total_return*100:+.1f}% (DD {r.max_drawdown*100:.1f}%)._",
                 parse_mode=MD)
         except Exception:  # noqa: BLE001

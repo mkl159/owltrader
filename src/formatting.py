@@ -109,6 +109,18 @@ def ideas_block(signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
+def fmt_params(p: dict) -> str:
+    """Décrit les réglages de stratégie sans caractères Markdown (pas de '_')."""
+    if not p:
+        return "réglages par défaut"
+    return (
+        f"MM {p.get('short', '?')}/{p.get('long', '?')} · "
+        f"RSI entrée < {p.get('rsi_entry_max', '?')} · "
+        f"{p.get('max_positions', '?')} positions · "
+        f"{p.get('alloc_pct', '?')}%/position"
+    )
+
+
 def sim_block(r, devise: str = "EUR") -> str:
     """Résultat d'une simulation historique du mode autonome, avec métriques pro."""
     if r is None:
@@ -127,7 +139,7 @@ def sim_block(r, devise: str = "EUR") -> str:
         f"• Trades : {r.n_trades} · réussite {r.win_rate*100:.0f}%\n"
         f"• Meilleur/pire trade : {r.best_trade:+.2f} / {r.worst_trade:+.2f} {devise}\n"
         f"• Frais payés : {r.fees_total:.2f} {devise}\n\n"
-        f"_Réglages : {r.params}_\n"
+        f"⚙️ Réglages : {fmt_params(r.params)}\n"
         "_⚠️ Performances passées ≠ futures. Simulation fictive, éducative._"
     )
 
