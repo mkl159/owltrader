@@ -1,0 +1,30 @@
+# --- Bot Telegram ---
+python-telegram-bot
+
+# --- Données de marché (multi-sources gratuites) ---
+yfinance
+ccxt
+requests
+pandas
+numpy
+pyarrow            # stockage Parquet
+
+# --- Indicateurs techniques ---
+ta
+
+# --- Actualités ---
+feedparser         # flux RSS
+
+# --- Planification (mises à jour cycliques) ---
+APScheduler
+
+# --- Configuration ---
+PyYAML
+python-dotenv
+
+# --- Visualisation ---
+matplotlib
+plotly
+
+# --- Tableau de bord (optionnel) ---
+streamlit

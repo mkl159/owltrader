@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# Données (potentiellement volumineuses)
+data/
+*.csv
+*.parquet
+
+# Secrets (clés API broker/data)
+.env
+*.key
+
+# Config locale (copiée depuis config.example.yaml)
+config.yaml
+
+# OS
+.DS_Store

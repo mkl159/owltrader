@@ -1,0 +1,45 @@
+# Configuration d'exemple OwlTrader — copie en config.yaml et adapte.
+
+langue: fr
+fuseau_horaire: Europe/Paris
+
+# Actifs surveillés par défaut (format CLASSE:SYMBOLE)
+watchlist:
+  - STOCK:AAPL
+  - INDEX:^FCHI        # CAC 40
+  - COMMO:GOLD
+  - FX:EURUSD
+  - CRYPTO:BTC
+
+# Sources de données activées, par ordre de priorité (repli automatique).
+# Le routeur garde toujours la donnée la plus récente.
+sources_marche:
+  - yfinance
+  - stooq
+  - coingecko          # crypto
+  - frankfurter        # devises (BCE)
+
+sources_actu:
+  - yahoo_rss
+  - coindesk_rss
+  - gdelt
+
+# Fréquences de rafraîchissement (minutes)
+frequences:
+  crypto: 5
+  fx: 10
+  actions: 15
+  actualites: 30
+  ia_news_batch: 60
+
+# Moteur de signaux
+signaux:
+  rsi_survente: 30
+  rsi_surachat: 70
+  ratio_risque_rendement_min: 1.5
+  atr_multiplicateur_stop: 2.0
+  anti_spam_heures: 4        # 1 signal max par actif sur cette fenêtre
+
+# IA des actualités : "local" (gratuit) ou "llm" (clé API requise)
+ia_actualites:
+  mode: local
