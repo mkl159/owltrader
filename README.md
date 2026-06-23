@@ -18,17 +18,39 @@
 
 ## 🗺️ Statut
 
-Projet en cours de construction. Le **[cahier des charges complet](CAHIER_DES_CHARGES.md)** décrit la
-vision, l'architecture, les sources de données, les patterns et le plan de livraison.
+MVP **fonctionnel** : suivi multi-actifs en quasi temps réel (actions, indices, matières premières,
+devises, crypto) via sources gratuites (**Yahoo Finance** + **Stooq** en repli, sélection de la
+donnée la plus fraîche), indicateurs, signaux et bot Telegram.
+Le **[cahier des charges complet](CAHIER_DES_CHARGES.md)** décrit la suite (actus + IA, backtest, patterns avancés).
 
-## 🚀 Démarrage (à venir)
+## 🚀 Démarrage
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-# Renseigner TELEGRAM_BOT_TOKEN dans .env, puis lancer le bot.
 ```
+
+### Tester tout de suite, sans Telegram
+
+```bash
+python -m src.cli prix AAPL
+python -m src.cli analyse STOCK:MSFT
+python -m src.cli prix CRYPTO:BTC      # crypto
+python -m src.cli prix FX:EURUSD       # devise
+python -m src.cli prix COMMO:GOLD      # matière première
+```
+
+### Lancer le bot Telegram
+
+```bash
+cp .env.example .env        # puis renseigner TELEGRAM_BOT_TOKEN (via @BotFather)
+python -m src.main
+```
+
+Commandes du bot : `/prix` · `/analyse` · `/watch` · `/unwatch` · `/liste` ·
+`/ajouter` · `/portefeuille` · `/perf` · `/aide`.
+Les actifs surveillés (`/watch`) déclenchent des **alertes automatiques** acheter/vendre.
 
 ## 🆓 100 % gratuit
 
