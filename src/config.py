@@ -17,6 +17,16 @@ DEFAULTS = {
     "langue": "fr",
     "fuseau_horaire": "Europe/Paris",
     "watchlist": ["STOCK:AAPL", "STOCK:MSFT", "INDEX:^FCHI"],
+    # Univers balayé par le screener pour proposer des pistes d'achat
+    "univers_scan": [
+        "STOCK:AAPL", "STOCK:MSFT", "STOCK:GOOGL", "STOCK:AMZN", "STOCK:NVDA",
+        "STOCK:META", "STOCK:TSLA", "STOCK:JPM", "STOCK:V", "STOCK:NFLX",
+        "STOCK:MC.PA", "STOCK:OR.PA", "STOCK:AIR.PA", "STOCK:TTE.PA", "STOCK:SAN.PA",
+        "INDEX:^GSPC", "INDEX:^FCHI",
+        "CRYPTO:BTC", "CRYPTO:ETH", "CRYPTO:SOL", "CRYPTO:BNB",
+        "COMMO:GOLD", "COMMO:SILVER", "COMMO:OIL",
+        "FX:EURUSD",
+    ],
     "frequences": {"actions": 15},  # minutes
     "signaux": {
         "rsi_survente": 30,

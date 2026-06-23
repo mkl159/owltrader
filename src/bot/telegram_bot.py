@@ -25,6 +25,7 @@ from ..config import CONFIG, get_secret
 from ..formatting import (
     analysis_full,
     digest_block,
+    ideas_block,
     news_block,
     quote_line,
     signal_card,
@@ -55,6 +56,8 @@ WELCOME = (
 
 HELP = (
     "🦉 *OwlTrader — commandes*\n\n"
+    "💡 *Pistes d'achat*\n"
+    "• /idees — scan du marché, meilleures opportunités\n\n"
     "📊 *S'informer*\n"
     "• /prix `AAPL` — dernier cours\n"
     "• /analyse `AAPL` — fiche + signal\n"
@@ -83,6 +86,7 @@ def _db(context) -> Storage:
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees")],
             [InlineKeyboardButton("👁️ Ma watchlist", callback_data="watchlist"),
              InlineKeyboardButton("💼 Portefeuille", callback_data="pf")],
             [InlineKeyboardButton("📈 Performance", callback_data="perf"),
@@ -91,6 +95,14 @@ def main_menu() -> InlineKeyboardMarkup:
              InlineKeyboardButton("❓ Aide", callback_data="help")],
         ]
     )
+
+
+def ideas_keyboard(signals) -> InlineKeyboardMarkup:
+    rows = [[InlineKeyboardButton(f"👁️ Suivre {s.symbol}", callback_data=f"watchadd:{s.symbol}")]
+            for s in signals[:5]]
+    rows.append([InlineKeyboardButton("🔄 Rescanner", callback_data="idees"),
+                 InlineKeyboardButton("⬅️ Retour", callback_data="menu")])
+    return InlineKeyboardMarkup(rows)
 
 
 def back_button(target: str = "menu") -> InlineKeyboardMarkup:
@@ -173,6 +185,18 @@ async def actu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     items = await asyncio.to_thread(get_news, raw, 5)
     await msg.edit_text(news_block(raw, items), parse_mode=MD,
                         disable_web_page_preview=True)
+
+
+async def idees(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🔎 Je scanne le marché à la recherche de pistes…")
+    signals = await _scan(context)
+    await msg.edit_text(ideas_block(signals), parse_mode=MD,
+                        reply_markup=ideas_keyboard(signals))
+
+
+async def _scan(context):
+    universe = CONFIG.get("univers_scan", [])
+    return await asyncio.to_thread(_svc(context).scan, universe, 5)
 
 
 async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -298,10 +322,17 @@ async def _send_digest(chat_id, context):
 # --------------------------------------------------------------------------- #
 async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    await q.answer()
     data = q.data
     chat_id = q.message.chat_id
     db = _db(context)
+
+    # Ajout à la watchlist depuis une piste : réponse en pop-up (une seule answer)
+    if data.startswith("watchadd:"):
+        raw = data.split(":", 1)[1]
+        db.add_watch(chat_id, Asset.parse(raw).raw)
+        return await q.answer(f"👁️ {raw} ajouté à ta watchlist", show_alert=True)
+
+    await q.answer()
 
     if data == "menu":
         return await q.edit_message_text("🦉 *Menu principal*", parse_mode=MD, reply_markup=main_menu())
@@ -319,6 +350,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "perf":
         await q.edit_message_text("⏳ Calcul…")
         return await _send_perf(chat_id, context, lambda *a, **k: context.bot.send_message(chat_id, *a, **k))
+    if data == "idees":
+        await q.edit_message_text("🔎 Je scanne le marché à la recherche de pistes…")
+        signals = await _scan(context)
+        return await q.edit_message_text(ideas_block(signals), parse_mode=MD,
+                                         reply_markup=ideas_keyboard(signals))
     if data == "settings":
         s = db.get_settings(chat_id)
         return await q.edit_message_text(_settings_text(s), parse_mode=MD, reply_markup=settings_keyboard(s))
@@ -419,6 +455,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("menu", menu_cmd))
     app.add_handler(CommandHandler("prix", prix))
     app.add_handler(CommandHandler("analyse", analyse))
+    app.add_handler(CommandHandler(["idees", "idee"], idees))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))
     app.add_handler(CommandHandler("unwatch", unwatch))

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from .models import Quote, Signal
+from .models import Direction, Quote, Signal
 from .news.collector import NewsItem, aggregate_sentiment
 from .service import Analysis
 
@@ -81,6 +81,31 @@ def news_block(symbol: str, items: list[NewsItem]) -> str:
         when = f"{it.published:%d/%m %H:%M}" if it.published else ""
         lines.append(f"{it.mood} [{_esc(it.title)}]({it.link})\n_{it.source} · {when}_")
     lines.append("\n_⚠️ Outil éducatif — vérifie toujours tes sources._")
+    return "\n".join(lines)
+
+
+def ideas_block(signals: list[Signal]) -> str:
+    """Liste des meilleures pistes d'achat repérées par le scan du marché."""
+    if not signals:
+        return (
+            "💡 *Pistes d'achat*\n\nAucune piste exploitable pour le moment "
+            "(données indisponibles). Réessaie plus tard."
+        )
+    buys = [s for s in signals if s.direction == Direction.BUY]
+    if buys:
+        lines = ["💡 *Pistes d'achat repérées*  _(classées par force)_", ""]
+        pool = buys
+    else:
+        lines = ["💡 *Pas de signal d'achat franc actuellement.*", "",
+                 "À surveiller (les mieux notés) :", ""]
+        pool = signals
+    for i, s in enumerate(pool, 1):
+        line = f"{i}. {s.emoji} *{s.symbol}* — force {s.score:.0f}/100\n   📌 {s.reason}"
+        if s.stop_loss:
+            rr = f" · R/R {s.risk_reward:.1f}" if s.risk_reward else ""
+            line += f"\n   🛡️ stop ≈ {_fmt_price(s.stop_loss)} · objectif ≈ {_fmt_price(s.take_profit)}{rr}"
+        lines.append(line)
+    lines.append("\n_⚠️ Outil éducatif — aucune reco d'investissement. À toi de décider._")
     return "\n".join(lines)
 
 

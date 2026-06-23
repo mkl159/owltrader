@@ -11,6 +11,26 @@ watchlist:
   - FX:EURUSD
   - CRYPTO:BTC
 
+# Univers balayé par le screener (/idees) pour proposer des pistes d'achat.
+# Ajoute/retire librement des actifs (format CLASSE:SYMBOLE).
+univers_scan:
+  - STOCK:AAPL
+  - STOCK:MSFT
+  - STOCK:GOOGL
+  - STOCK:AMZN
+  - STOCK:NVDA
+  - STOCK:META
+  - STOCK:TSLA
+  - STOCK:MC.PA        # LVMH
+  - STOCK:OR.PA        # L'Oréal
+  - STOCK:TTE.PA       # TotalEnergies
+  - INDEX:^GSPC        # S&P 500
+  - CRYPTO:BTC
+  - CRYPTO:ETH
+  - CRYPTO:SOL
+  - COMMO:GOLD
+  - COMMO:OIL
+
 # Sources de données activées, par ordre de priorité (repli automatique).
 # Le routeur garde toujours la donnée la plus récente.
 sources_marche:
