@@ -22,10 +22,13 @@ from telegram.ext import (
 )
 
 from ..config import CONFIG, get_secret
+from ..charting import make_chart
 from ..formatting import (
     analysis_full,
+    backtest_block,
     digest_block,
     ideas_block,
+    movers_block,
     news_block,
     quote_line,
     signal_card,
@@ -56,11 +59,14 @@ WELCOME = (
 
 HELP = (
     "🦉 *OwlTrader — commandes*\n\n"
-    "💡 *Pistes d'achat*\n"
-    "• /idees — scan du marché, meilleures opportunités\n\n"
+    "💡 *Pistes & marché*\n"
+    "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
+    "• /movers — plus fortes hausses/baisses du jour\n\n"
     "📊 *S'informer*\n"
     "• /prix `AAPL` — dernier cours\n"
-    "• /analyse `AAPL` — fiche + signal\n"
+    "• /analyse `AAPL` — fiche + signal (avec sentiment des actus)\n"
+    "• /graph `AAPL` — graphique cours + RSI\n"
+    "• /backtest `AAPL` — test d'une stratégie sur l'historique\n"
     "• /actu `AAPL` — actualités + sentiment\n\n"
     "👁️ *Surveillance*\n"
     "• /watch `AAPL` · /unwatch `AAPL` · /liste\n\n"
@@ -86,7 +92,8 @@ def _db(context) -> Storage:
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees")],
+            [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees"),
+             InlineKeyboardButton("🚀 Top mouvements", callback_data="movers")],
             [InlineKeyboardButton("👁️ Ma watchlist", callback_data="watchlist"),
              InlineKeyboardButton("💼 Portefeuille", callback_data="pf")],
             [InlineKeyboardButton("📈 Performance", callback_data="perf"),
@@ -118,6 +125,8 @@ def watchlist_keyboard(assets: list[str]) -> InlineKeyboardMarkup:
 def asset_keyboard(raw: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("📈 Graphique", callback_data=f"graph:{raw}"),
+             InlineKeyboardButton("🧪 Backtest", callback_data=f"bt:{raw}")],
             [InlineKeyboardButton("📰 Actus", callback_data=f"news:{raw}"),
              InlineKeyboardButton("🗑️ Retirer", callback_data=f"unwatch:{raw}")],
             [InlineKeyboardButton("⬅️ Watchlist", callback_data="watchlist")],
@@ -187,16 +196,55 @@ async def actu(update: Update, context: ContextTypes.DEFAULT_TYPE):
                         disable_web_page_preview=True)
 
 
+CLASSES = {"actions": "STOCK", "action": "STOCK", "crypto": "CRYPTO", "cryptos": "CRYPTO",
+           "devises": "FX", "devise": "FX", "fx": "FX", "matieres": "COMMO",
+           "matières": "COMMO", "commo": "COMMO", "indices": "INDEX", "indice": "INDEX"}
+
+
 async def idees(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    klass = CLASSES.get(context.args[0].lower()) if context.args else None
     msg = await update.message.reply_text("🔎 Je scanne le marché à la recherche de pistes…")
-    signals = await _scan(context)
+    signals = await _scan(context, klass)
     await msg.edit_text(ideas_block(signals), parse_mode=MD,
                         reply_markup=ideas_keyboard(signals))
 
 
-async def _scan(context):
+async def _scan(context, klass: str | None = None):
     universe = CONFIG.get("univers_scan", [])
+    if klass:
+        universe = [u for u in universe if u.startswith(f"{klass}:")]
     return await asyncio.to_thread(_svc(context).scan, universe, 5)
+
+
+async def backtest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage : /backtest AAPL")
+    raw = Asset.parse(context.args[0]).raw
+    msg = await update.message.reply_text("🧪 Backtest en cours…")
+    r = await asyncio.to_thread(_svc(context).backtest, raw)
+    await msg.edit_text(backtest_block(r), parse_mode=MD)
+
+
+async def graph_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage : /graph AAPL")
+    raw = Asset.parse(context.args[0]).raw
+    await _send_chart(update.effective_chat.id, context, raw)
+
+
+async def movers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🚀 Recherche des plus forts mouvements…")
+    m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
+    await msg.edit_text(movers_block(m), parse_mode=MD)
+
+
+async def _send_chart(chat_id, context, raw: str):
+    df = await asyncio.to_thread(_svc(context).history, raw)
+    path = await asyncio.to_thread(make_chart, raw, df)
+    if not path:
+        return await context.bot.send_message(chat_id, "📈 Pas assez de données pour un graphique.")
+    with open(path, "rb") as f:
+        await context.bot.send_photo(chat_id, photo=f, caption=f"📈 {raw}")
 
 
 async def watch(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -355,6 +403,19 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         signals = await _scan(context)
         return await q.edit_message_text(ideas_block(signals), parse_mode=MD,
                                          reply_markup=ideas_keyboard(signals))
+    if data == "movers":
+        await q.edit_message_text("🚀 Recherche des plus forts mouvements…")
+        m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
+        return await q.edit_message_text(movers_block(m), parse_mode=MD, reply_markup=back_button())
+    if data.startswith("graph:"):
+        raw = data.split(":", 1)[1]
+        return await _send_chart(chat_id, context, raw)
+    if data.startswith("bt:"):
+        raw = data.split(":", 1)[1]
+        await q.edit_message_text("🧪 Backtest en cours…")
+        r = await asyncio.to_thread(_svc(context).backtest, raw)
+        return await q.edit_message_text(backtest_block(r), parse_mode=MD,
+                                         reply_markup=asset_keyboard(raw))
     if data == "settings":
         s = db.get_settings(chat_id)
         return await q.edit_message_text(_settings_text(s), parse_mode=MD, reply_markup=settings_keyboard(s))
@@ -412,7 +473,7 @@ async def surveiller_job(context: ContextTypes.DEFAULT_TYPE):
         try:
             sens = db.get_settings(chat_id).get("sensibilite", "normale")
             min_hours, min_force = SENSIBILITES.get(sens, SENSIBILITES["normale"])
-            a = await asyncio.to_thread(svc.analyze, asset)
+            a = await asyncio.to_thread(svc.analyze, asset, False)
             sig = a.signal
             if sig is None or sig.direction == Direction.HOLD:
                 continue
@@ -424,6 +485,44 @@ async def surveiller_job(context: ContextTypes.DEFAULT_TYPE):
             await context.bot.send_message(chat_id, signal_card(sig), parse_mode=MD)
         except Exception as e:  # noqa: BLE001
             log.warning("Surveillance %s/%s : %s", chat_id, asset, e)
+
+
+async def portefeuille_job(context: ContextTypes.DEFAULT_TYPE):
+    """Surveille les positions détenues et alerte quand il faudrait envisager de vendre."""
+    db: Storage = context.application.bot_data["db"]
+    svc: MarketService = context.application.bot_data["svc"]
+    # Regroupe les actifs détenus par utilisateur
+    seen: set[tuple[int, str]] = set()
+    for chat_id in {cid for cid, _ in db.all_watched_pairs()} | set(db.chats_with_digest()):
+        for p in db.get_positions(chat_id):
+            asset = p["asset"]
+            if (chat_id, asset) in seen:
+                continue
+            seen.add((chat_id, asset))
+            try:
+                a = await asyncio.to_thread(svc.analyze, asset, False)
+                if a.signal is None or a.quote is None:
+                    continue
+                pnl_pct = None
+                if p["buy_price"]:
+                    pnl_pct = (a.quote.price - p["buy_price"]) / p["buy_price"] * 100
+                # Alerte si signal de vente OU perte importante (> 8%)
+                sell = a.signal.direction == Direction.SELL
+                stop_hit = pnl_pct is not None and pnl_pct <= -8
+                if not (sell or stop_hit):
+                    continue
+                if not db.should_alert(chat_id, f"PF:{asset}", "VENDRE", 6):
+                    continue
+                why = "signal de vente" if sell else f"perte de {pnl_pct:.1f}% sur ta position"
+                await context.bot.send_message(
+                    chat_id,
+                    f"💼🔴 *Envisage de vendre {asset}*\n📌 {why}\n"
+                    f"Cours : {a.quote.price:g} (achat {p['buy_price']:g})\n"
+                    "_⚠️ Outil éducatif — décision finale à toi._",
+                    parse_mode=MD,
+                )
+            except Exception as e:  # noqa: BLE001
+                log.warning("Portefeuille %s/%s : %s", chat_id, asset, e)
 
 
 async def digest_job(context: ContextTypes.DEFAULT_TYPE):
@@ -456,6 +555,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("prix", prix))
     app.add_handler(CommandHandler("analyse", analyse))
     app.add_handler(CommandHandler(["idees", "idee"], idees))
+    app.add_handler(CommandHandler(["backtest", "bt"], backtest_cmd))
+    app.add_handler(CommandHandler(["graph", "graphique"], graph_cmd))
+    app.add_handler(CommandHandler(["movers", "mouvements"], movers_cmd))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))
     app.add_handler(CommandHandler("unwatch", unwatch))
@@ -469,6 +571,7 @@ def build_application() -> Application:
 
     freq_min = CONFIG.get("frequences", {}).get("actions", 15)
     app.job_queue.run_repeating(surveiller_job, interval=freq_min * 60, first=30)
+    app.job_queue.run_repeating(portefeuille_job, interval=freq_min * 60, first=90)
     # Digest quotidien à 8h (heure du serveur)
     from datetime import time as dtime
     app.job_queue.run_daily(digest_job, time=dtime(hour=8, minute=0))

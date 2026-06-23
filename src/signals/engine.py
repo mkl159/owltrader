@@ -11,8 +11,12 @@ from ..indicators import compute_indicators
 from ..models import Direction, Signal
 
 
-def analyze(symbol: str, df: pd.DataFrame, cfg: dict | None = None) -> Optional[Signal]:
-    """Analyse un historique OHLCV et renvoie un Signal (ou None si trop peu de données)."""
+def analyze(symbol: str, df: pd.DataFrame, cfg: dict | None = None,
+            sentiment: float | None = None) -> Optional[Signal]:
+    """Analyse un historique OHLCV et renvoie un Signal (ou None si trop peu de données).
+
+    sentiment : score d'actu dans [-1, 1] (optionnel) — pondère légèrement la décision.
+    """
     if df is None or len(df) < 30:
         return None
     cfg = (cfg or CONFIG).get("signaux", {})
@@ -23,6 +27,12 @@ def analyze(symbol: str, df: pd.DataFrame, cfg: dict | None = None) -> Optional[
 
     # --- Vote pondéré : chaque critère pousse vers l'achat (+) ou la vente (-) ---
     votes: list[tuple[float, str]] = []
+
+    # Sentiment des actualités (poids modéré)
+    if sentiment is not None and abs(sentiment) > 0.15:
+        w = round(sentiment * 1.5, 2)
+        mood = "actus positives" if sentiment > 0 else "actus négatives"
+        votes.append((w, mood))
 
     rsi = ind["rsi"]
     if rsi is not None:

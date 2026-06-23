@@ -48,9 +48,16 @@ cp .env.example .env        # puis renseigner TELEGRAM_BOT_TOKEN (via @BotFather
 python -m src.main
 ```
 
-Commandes du bot : `/prix` · `/analyse` · `/watch` · `/unwatch` · `/liste` ·
-`/ajouter` · `/portefeuille` · `/perf` · `/aide`.
-Les actifs surveillés (`/watch`) déclenchent des **alertes automatiques** acheter/vendre.
+Commandes du bot :
+- 💡 `/idees` (filtrable : `/idees crypto`) · 🚀 `/movers` — scan du marché & pistes d'achat
+- 📊 `/prix` · `/analyse` (avec sentiment des actus) · 📈 `/graph` · 🧪 `/backtest` · 📰 `/actu`
+- 👁️ `/watch` · `/unwatch` · `/liste`
+- 💼 `/ajouter` · `/portefeuille` · `/perf`
+- ⚙️ `/reglages` · `/digest` · `/menu` · `/aide`
+
+**Alertes automatiques** : signaux acheter/vendre sur la watchlist, **alertes de vente sur le
+portefeuille** (signal de vente ou perte importante), et **résumé quotidien**.
+Tout est aussi pilotable **aux boutons** via `/menu`.
 
 ## 🆓 100 % gratuit
 

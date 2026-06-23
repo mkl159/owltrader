@@ -44,13 +44,49 @@ class MarketService:
     def quote(self, raw: str) -> Optional[Quote]:
         return self.router.get_quote(Asset.parse(raw))
 
-    def analyze(self, raw: str) -> Analysis:
+    def analyze(self, raw: str, with_news: bool = True) -> Analysis:
         asset = Asset.parse(raw)
         quote = self.router.get_quote(asset)
         df = self.router.get_history(asset, period="1y", interval="1d")
-        signal = analyze(asset.raw, df) if df is not None else None
+        sentiment = self._news_sentiment(asset.raw) if with_news else None
+        signal = analyze(asset.raw, df, sentiment=sentiment) if df is not None else None
         indicators = compute_indicators(df) if df is not None else {}
         return Analysis(asset=asset, quote=quote, signal=signal, indicators=indicators)
+
+    @staticmethod
+    def _news_sentiment(raw: str) -> Optional[float]:
+        """Sentiment moyen des dernières actus (None si indispo). Import paresseux."""
+        try:
+            from .news import get_news
+            from .news.collector import aggregate_sentiment
+            items = get_news(raw, 5)
+            return aggregate_sentiment(items) if items else None
+        except Exception:  # noqa: BLE001
+            return None
+
+    def movers(self, universe: list[str]) -> list[tuple[str, Quote]]:
+        """Renvoie (actif, cotation) trié par variation du jour décroissante."""
+        out: list[tuple[str, Quote]] = []
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            futures = {ex.submit(self.quote, raw): raw for raw in universe}
+            for fut in as_completed(futures):
+                try:
+                    q = fut.result()
+                except Exception:  # noqa: BLE001
+                    continue
+                if q is not None and q.change_pct is not None:
+                    out.append((futures[fut], q))
+        out.sort(key=lambda t: t[1].change_pct, reverse=True)
+        return out
+
+    def backtest(self, raw: str, short: int = 20, long: int = 50):
+        from .backtest import run_backtest
+        asset = Asset.parse(raw)
+        df = self.router.get_history(asset, period="2y", interval="1d")
+        return run_backtest(asset.raw, df, short, long) if df is not None else None
+
+    def history(self, raw: str, period: str = "1y"):
+        return self.router.get_history(Asset.parse(raw), period=period, interval="1d")
 
     def signal_for(self, raw: str) -> Optional[Signal]:
         """Signal seul (sans cotation séparée) — léger, pour le scan de marché."""

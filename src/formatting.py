@@ -109,6 +109,38 @@ def ideas_block(signals: list[Signal]) -> str:
     return "\n".join(lines)
 
 
+def backtest_block(r) -> str:
+    """Résultat de backtest, clair et synthétique."""
+    if r is None:
+        return "🧪 Backtest impossible (pas assez d'historique pour cet actif)."
+    verdict = "✅ bat l'achat-conservation" if r.beats_buyhold() else "❌ sous l'achat-conservation"
+    return (
+        f"🧪 *Backtest — {r.symbol}*\n"
+        f"_Stratégie croisement SMA{r.short}/SMA{r.long} · {r.start:%m/%Y}→{r.end:%m/%Y}_\n\n"
+        f"• Rendement stratégie : *{r.strategy_return*100:+.1f}%*\n"
+        f"• Achat-conservation : {r.buyhold_return*100:+.1f}%  ({verdict})\n"
+        f"• Trades : {r.n_trades} · réussite : {r.win_rate*100:.0f}%\n"
+        f"• Drawdown max : {r.max_drawdown*100:.1f}%\n"
+        f"• Temps investi : {r.exposure*100:.0f}%\n\n"
+        "_⚠️ Performances passées ≠ performances futures. Outil éducatif._"
+    )
+
+
+def movers_block(movers: list) -> str:
+    """Top hausses et baisses du jour."""
+    if not movers:
+        return "🚀 Aucune donnée de variation disponible."
+    gainers = movers[:3]
+    losers = list(reversed(movers[-3:]))
+    lines = ["🚀 *Plus fortes variations du jour*", "", "📈 *Hausses*"]
+    for raw, q in gainers:
+        lines.append(f"🟢 {raw} : {q.change_pct:+.2f}%  ({_fmt_price(q.price, q.currency)})")
+    lines.append("\n📉 *Baisses*")
+    for raw, q in losers:
+        lines.append(f"🔴 {raw} : {q.change_pct:+.2f}%  ({_fmt_price(q.price, q.currency)})")
+    return "\n".join(lines)
+
+
 def digest_block(symbol: str, a: Analysis) -> str:
     """Une ligne synthétique par actif pour le résumé quotidien."""
     if a.quote is None:
