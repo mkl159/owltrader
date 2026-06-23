@@ -847,10 +847,11 @@ def build_application() -> Application:
     app.add_handler(CallbackQueryHandler(on_button))
 
     freq_min = CONFIG.get("frequences", {}).get("actions", 15)
+    auto_min = CONFIG.get("frequences", {}).get("auto", 5)
     app.job_queue.run_repeating(surveiller_job, interval=freq_min * 60, first=30)
     app.job_queue.run_repeating(portefeuille_job, interval=freq_min * 60, first=90)
-    # Trading autonome : toutes les heures (la stratégie décide sur bougie journalière)
-    app.job_queue.run_repeating(auto_trade_job, interval=3600, first=120)
+    # Trading autonome : lecture du marché toutes les `auto` minutes (défaut 5)
+    app.job_queue.run_repeating(auto_trade_job, interval=auto_min * 60, first=120)
     # Digest + bilan autonome + auto-réglage quotidiens (heure du serveur)
     from datetime import time as dtime
     app.job_queue.run_daily(digest_job, time=dtime(hour=8, minute=0))

@@ -27,7 +27,7 @@ DEFAULTS = {
         "COMMO:GOLD", "COMMO:SILVER", "COMMO:OIL",
         "FX:EURUSD",
     ],
-    "frequences": {"actions": 15},  # minutes
+    "frequences": {"actions": 15, "auto": 5},  # minutes
     # Paramètres du mode autonome (paper-trading fictif)
     "paper": {
         "capital": 1000,

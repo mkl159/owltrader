@@ -49,6 +49,7 @@ frequences:
   crypto: 5
   fx: 10
   actions: 15
+  auto: 5               # mode autonome : lecture du marché toutes les 5 min
   actualites: 30
   ia_news_batch: 60
 
