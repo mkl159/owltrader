@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from .models import Quote, Signal
+from .news.collector import NewsItem, aggregate_sentiment
 from .service import Analysis
 
 
@@ -60,3 +61,35 @@ def analysis_full(a: Analysis) -> str:
     parts.append("")
     parts.append("_⚠️ Outil éducatif — aucune reco d'investissement._")
     return "\n".join(parts)
+
+
+def _esc(text: str) -> str:
+    # échappe les caractères Markdown susceptibles de casser le rendu
+    for ch in ("_", "*", "[", "]", "`"):
+        text = text.replace(ch, " ")
+    return text
+
+
+def news_block(symbol: str, items: list[NewsItem]) -> str:
+    """Liste courte d'actus avec humeur (sentiment) et lien."""
+    if not items:
+        return f"📰 Aucune actu récente pour *{symbol}*."
+    avg = aggregate_sentiment(items)
+    tone = "🟢 plutôt positif" if avg > 0.15 else "🔴 plutôt négatif" if avg < -0.15 else "⚪ neutre"
+    lines = [f"📰 *Actus — {symbol}*  (ton global : {tone})", ""]
+    for it in items:
+        when = f"{it.published:%d/%m %H:%M}" if it.published else ""
+        lines.append(f"{it.mood} [{_esc(it.title)}]({it.link})\n_{it.source} · {when}_")
+    lines.append("\n_⚠️ Outil éducatif — vérifie toujours tes sources._")
+    return "\n".join(lines)
+
+
+def digest_block(symbol: str, a: Analysis) -> str:
+    """Une ligne synthétique par actif pour le résumé quotidien."""
+    if a.quote is None:
+        return f"• *{symbol}* : donnée indisponible"
+    pct = f" {a.quote.change_pct:+.1f}%" if a.quote.change_pct is not None else ""
+    sig = ""
+    if a.signal:
+        sig = f" — {a.signal.emoji} {a.signal.direction.value}"
+    return f"• *{symbol}* : {_fmt_price(a.quote.price, a.quote.currency)}{pct}{sig}"

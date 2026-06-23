@@ -37,8 +37,36 @@ class Storage:
                     chat_id INTEGER, asset TEXT, direction TEXT, sent_at TEXT,
                     PRIMARY KEY (chat_id, asset)
                 );
+                CREATE TABLE IF NOT EXISTS settings (
+                    chat_id INTEGER PRIMARY KEY,
+                    sensibilite TEXT DEFAULT 'normale',
+                    digest INTEGER DEFAULT 1
+                );
                 """
             )
+
+    # --- Réglages par utilisateur ---
+    def get_settings(self, chat_id: int) -> dict:
+        with self._conn() as c:
+            row = c.execute("SELECT * FROM settings WHERE chat_id=?", (chat_id,)).fetchone()
+        if row:
+            return dict(row)
+        return {"chat_id": chat_id, "sensibilite": "normale", "digest": 1}
+
+    def set_setting(self, chat_id: int, key: str, value):
+        if key not in ("sensibilite", "digest"):
+            raise ValueError(key)
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO settings (chat_id) VALUES (?) ON CONFLICT(chat_id) DO NOTHING",
+                (chat_id,),
+            )
+            c.execute(f"UPDATE settings SET {key}=? WHERE chat_id=?", (value, chat_id))
+
+    def chats_with_digest(self) -> list[int]:
+        with self._conn() as c:
+            rows = c.execute("SELECT chat_id FROM settings WHERE digest=1").fetchall()
+        return [r["chat_id"] for r in rows]
 
     # --- Watchlist ---
     def add_watch(self, chat_id: int, asset: str):
