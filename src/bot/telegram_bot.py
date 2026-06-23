@@ -36,6 +36,7 @@ from ..formatting import (
     quote_line,
     sim_block,
     signal_card,
+    state_recap,
     trade_log,
     trend_block,
 )
@@ -349,6 +350,7 @@ async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode=MD,
     )
     await _run_auto_cycle(chat_id, context, announce=True)
+    await _send_bilan(chat_id, context)
 
 
 async def reset_auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -434,12 +436,22 @@ async def _run_auto_cycle(chat_id, context, announce: bool = False):
                       tr.get("pnl") if tr["side"] == "VENTE" else None, dev),
             parse_mode=MD,
         )
-    # enregistre un point d'équity
-    _, equity, _ = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+    # état + point d'équity
+    acc, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
     db.paper_record_equity(chat_id, equity)
-    if announce and not executed:
+    invested = sum(h["value"] for h in holdings)
+    # Dès qu'il agit, il dit où en est le cash et le total
+    if executed:
         await context.bot.send_message(
-            chat_id, "👁️ Aucun achat ce tour-ci (rien d'assez intéressant). Je surveille et j'agirai dès qu'un signal sort.")
+            chat_id,
+            state_recap(acc["cash"], invested, len(holdings), equity, acc["capital"], dev),
+            parse_mode=MD)
+    elif announce:
+        await context.bot.send_message(
+            chat_id,
+            "👁️ Aucun mouvement ce tour-ci (positions stables).\n"
+            + state_recap(acc["cash"], invested, len(holdings), equity, acc["capital"], dev),
+            parse_mode=MD)
 
 
 async def _send_bilan(chat_id, context):
@@ -655,7 +667,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cfg = _paper_cfg()
         db.paper_open(chat_id, cfg.get("capital", 1000), cfg.get("devise", "EUR"))
         await q.edit_message_text("🤖 *Mode autonome activé* (1000 € fictifs). Premier tour…", parse_mode=MD)
-        return await _run_auto_cycle(chat_id, context, announce=True)
+        await _run_auto_cycle(chat_id, context, announce=True)
+        return await _send_bilan(chat_id, context)
     if data == "auto_bilan":
         await q.edit_message_text("📊 Préparation du bilan…")
         return await _send_bilan(chat_id, context)

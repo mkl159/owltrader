@@ -173,36 +173,55 @@ def market_block(m) -> str:
 
 
 def autobilan_block(acc: dict, equity: float, holdings: list, trades_today: list) -> str:
-    """Bilan du compte autonome : valeur, bénéfice, positions, actions du jour."""
+    """Bilan du compte autonome : valeur, bénéfice, cash, total investi, positions, actions."""
     dev = acc.get("devise", "EUR")
     cap = acc["capital"]
+    cash = acc["cash"]
+    invested = sum(h["value"] for h in holdings)
     profit = equity - cap
     emoji = "🟢" if profit >= 0 else "🔴"
+    inv_pct = invested / equity * 100 if equity else 0
     lines = [
         f"{emoji} *Bilan du portefeuille autonome*",
-        f"💶 Valeur : *{equity:.2f} {dev}*  (départ {cap:.0f})",
+        "",
+        f"📊 *Total : {equity:.2f} {dev}*  (départ {cap:.0f})",
         f"💰 Bénéfice : *{profit:+.2f} {dev}* ({profit/cap*100:+.1f}%)",
-        f"💵 Liquidités : {acc['cash']:.2f} {dev}",
+        "",
+        f"💵 Cash dispo : *{cash:.2f} {dev}*",
+        f"📦 Investi en actions : *{invested:.2f} {dev}* ({len(holdings)} position(s), {inv_pct:.0f}% du total)",
         "",
     ]
     if holdings:
-        lines.append("📦 *Positions détenues*")
+        lines.append("*Détail des positions*")
         for h in holdings:
             pnl = h.get("pnl_pct")
             tag = f" ({pnl:+.1f}%)" if pnl is not None else ""
             lines.append(f"• {h['asset']} : {h['value']:.2f} {dev}{tag}")
     else:
-        lines.append("📦 Aucune position (tout en liquidités).")
+        lines.append("📦 Aucune position — tout est en cash.")
     if trades_today:
         lines.append("\n📝 *Actions du jour*")
         for t in trades_today:
             ic = "🟢 ACHAT" if t["side"] == "ACHAT" else "🔴 VENTE"
-            pnl = f" · P&L {t['pnl']:+.2f}" if t["side"] == "VENTE" else ""
+            pnl = f" · résultat {t['pnl']:+.2f}" if t["side"] == "VENTE" else ""
             lines.append(f"{ic} {t['asset']} : {t['quantity']:.4g} @ {t['price']:.2f} (frais {t['fee']:.2f}){pnl}")
     else:
-        lines.append("\n📝 Aucune action aujourd'hui (surveillance).")
+        lines.append("\n📝 Aucune action aujourd'hui — il surveille (positions stables).")
     lines.append("\n_⚠️ Trading fictif — aucune transaction réelle._")
     return "\n".join(lines)
+
+
+def state_recap(cash: float, invested: float, n_positions: int, equity: float,
+                capital: float, devise: str = "EUR") -> str:
+    """Récap court de l'état du compte, envoyé après chaque action autonome."""
+    profit = equity - capital
+    emoji = "🟢" if profit >= 0 else "🔴"
+    return (
+        f"{emoji} *État du compte autonome*\n"
+        f"💵 Cash : {cash:.2f} {devise}\n"
+        f"📦 En actions : {invested:.2f} {devise} ({n_positions} position(s))\n"
+        f"📊 Total : *{equity:.2f} {devise}* ({profit:+.2f} / {profit/capital*100:+.1f}%)"
+    )
 
 
 def trade_log(side: str, asset: str, qty: float, price: float, fee: float,
