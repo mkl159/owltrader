@@ -1,0 +1,4 @@
+# Dépendances de développement (tests, qualité)
+-r requirements.txt
+pytest
+ruff
