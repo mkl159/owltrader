@@ -102,15 +102,21 @@ class MarketService:
                     out[futures[fut]] = df
         return out
 
-    def simulate_portfolio(self, universe: list[str], capital: float = 1000.0, **kw):
+    def simulate_portfolio(self, universe: list[str], capital: float = 1000.0,
+                           period: str | None = None, **kw):
         """Simulation historique du mode autonome (preuve de rentabilité + courbe)."""
         from .paper import simulate
-        return simulate(self.fetch_histories(universe), capital=capital, **kw)
+        from .config import CONFIG
+        period = period or CONFIG.get("paper", {}).get("backtest_period", "5y")
+        return simulate(self.fetch_histories(universe, period=period), capital=capital, **kw)
 
-    def optimize_strategy(self, universe: list[str], capital: float = 1000.0, **fixed):
+    def optimize_strategy(self, universe: list[str], capital: float = 1000.0,
+                          period: str | None = None, **fixed):
         """Auto-tuning : meilleurs paramètres sur l'historique. -> (params, SimResult)."""
         from .paper.optimizer import optimize
-        return optimize(self.fetch_histories(universe), capital=capital, **fixed)
+        from .config import CONFIG
+        period = period or CONFIG.get("paper", {}).get("backtest_period", "5y")
+        return optimize(self.fetch_histories(universe, period=period), capital=capital, **fixed)
 
     def should_hold(self, raw: str, **params) -> bool:
         """Décision live de la stratégie : faut-il détenir cet actif maintenant ?"""

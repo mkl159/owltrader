@@ -61,9 +61,10 @@ paper:
   max_positions: 5       # nombre max de positions simultanées
   alloc_pct: 20          # % du capital investi par position
   devise: EUR
-  # Risk manager (assurance anti-krach)
-  stop_loss_pct: 15      # vente auto si une position perd plus de X%
-  max_dd_pause: 25       # coupe-circuit : stop des achats si le compte perd +de X% depuis son sommet
+  # Risk manager — calibré sur 10 ans (krach COVID + bear 2022)
+  stop_loss_pct: 25      # filet large quasi gratuit (protège d'un actif qui s'effondre)
+  max_dd_pause: 0        # coupe-circuit DÉSACTIVÉ : il ratait les reprises et plombait le rendement
+  backtest_period: 5y    # fenêtre de simulation / auto-réglage (5 ans = plusieurs régimes)
 
 # Moteur de signaux
 signaux:

@@ -36,9 +36,12 @@ DEFAULTS = {
         "max_positions": 5,     # nombre max de positions simultanées
         "alloc_pct": 20,        # % du capital investi par position
         "devise": "EUR",
-        # Risk manager (assurance anti-krach : faible coût en temps normal, plafonne les pertes)
-        "stop_loss_pct": 15,    # vente auto si une position perd plus de X% depuis l'achat
-        "max_dd_pause": 25,     # coupe-circuit : on cesse d'acheter si le compte perd +de X% depuis son sommet
+        # Risk manager — calibré sur 10 ans (2016-2026, incl. krach COVID + bear 2022).
+        # Stop-loss large = filet quasi gratuit. Coupe-circuit DÉSACTIVÉ : il ratait les
+        # reprises post-krach et divisait le rendement par ~25 sur 10 ans.
+        "stop_loss_pct": 25,    # vente auto si une position perd plus de X% depuis l'achat
+        "max_dd_pause": 0,      # 0 = désactivé (la sortie de tendance gère déjà les krachs)
+        "backtest_period": "5y",  # fenêtre de simulation/auto-réglage (robustesse multi-régimes)
     },
     "signaux": {
         "rsi_survente": 30,
