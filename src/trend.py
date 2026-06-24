@@ -93,9 +93,18 @@ def aggregate_trend(symbol: str, df: pd.DataFrame, sentiment: float | None = Non
     if sentiment is not None and abs(sentiment) > 0.05:
         comp["actus"] = max(-1.5, min(1.5, sentiment * 1.5))
 
+    # 7) Saisonnalité (effet calendaire, poids modéré)
+    try:
+        from .seasonality import seasonal_context
+        bias = seasonal_context().bias
+        if abs(bias) > 0.05:
+            comp["saison"] = round(bias * 0.8, 2)
+    except Exception:  # noqa: BLE001
+        pass
+
     # Agrégation normalisée en -100..100 (borne = somme des poids max possibles)
     total = sum(comp.values())
-    weight_cap = 1 + 1.5 + 1.5 + 1 + 1 + 1 + 1 + 1 + 1.5  # ~10.5
+    weight_cap = 1 + 1.5 + 1.5 + 1 + 1 + 1 + 1 + 1 + 1.5 + 0.8  # ~11.3
     score = max(-100.0, min(100.0, total / weight_cap * 100))
 
     return Trend(symbol=symbol, score=round(score, 1), label=_label(score), components=comp)

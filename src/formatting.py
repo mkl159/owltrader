@@ -144,6 +144,28 @@ def sim_block(r, devise: str = "EUR") -> str:
     )
 
 
+def season_block(s, upcoming: list, next_hol) -> str:
+    """Contexte saisonnier + prochains jours fériés boursiers."""
+    arrow = "🟢" if s.bias > 0.15 else "🔴" if s.bias < -0.15 else "⚪"
+    lines = [
+        f"📅 *Contexte saisonnier du marché*  {arrow}",
+        f"Biais saisonnier : *{s.bias:+.2f}* sur [-1, 1]",
+        "",
+    ]
+    for n in s.notes:
+        lines.append(f"• {n}")
+    if next_hol:
+        jours, nom = next_hol
+        quand = "aujourd'hui/demain" if jours <= 1 else f"dans {jours} séances"
+        lines.append(f"\n🏦 Prochain jour férié boursier : *{nom}* ({quand})")
+    if upcoming:
+        lines.append("\n*Jours fériés à venir*")
+        for d, name in upcoming[:4]:
+            lines.append(f"• {d:%d/%m/%Y} — {name}")
+    lines.append("\n_⚠️ Effets statistiques historiques, pas une garantie. Outil éducatif._")
+    return "\n".join(lines)
+
+
 def team_block(symbol: str, votes: dict) -> str:
     """Affiche le vote de chaque stratégie de l'équipe."""
     if not votes:

@@ -59,6 +59,9 @@ def simulate(
     max_dd_pause: float = 0.0,
     trailing_stop_pct: float = 0.0,
     market_df=None,
+    seasonal_filter: bool = False,
+    vix_df=None,
+    vix_max: float = 0.0,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
     histories = {k: v for k, v in histories.items() if v is not None and "close" in v and len(v) > long + 5}
@@ -96,6 +99,10 @@ def simulate(
     if market_df is not None:
         from ..regime import regime_series
         regime = regime_series(market_df).reindex(closes_df.index).ffill().fillna(False)
+    # Filtre de risque (VIX) : pas d'achat quand la peur dépasse un seuil
+    vix = None
+    if vix_df is not None and vix_max > 0:
+        vix = vix_df["close"].astype(float).reindex(closes_df.index).ffill()
 
     for t in dates:
         # --- VENTES (stratégie OU stop-loss du risk manager) ---
@@ -124,6 +131,10 @@ def simulate(
         paused = ddp > 0 and equity_pre < peak * (1 - ddp)
         if regime is not None and not bool(regime.get(t, True)):
             paused = True  # marché baissier : on n'ouvre pas de nouvelle position
+        if seasonal_filter and t.month not in (11, 12, 1, 2, 3, 4):
+            paused = True  # période faible (« sell in May ») : pas de nouvel achat
+        if vix is not None and vix.get(t, 0) > vix_max:
+            paused = True  # peur extrême (VIX élevé) : on n'ouvre pas de position
 
         # --- ACHATS ---
         free = max_positions - len(holdings)

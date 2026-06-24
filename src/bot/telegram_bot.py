@@ -82,6 +82,8 @@ HELP = (
     "• /equipe `AAPL` — le vote de l'équipe de stratégies\n"
     "• /tendance `AAPL` — tendance agrégée (multi-sources)\n"
     "• /marche — tendance générale du marché\n"
+    "• /saison — contexte saisonnier + jours fériés\n"
+    "• /risque — climat macro/géopolitique (VIX + actus)\n"
     "• /movers — plus fortes hausses/baisses du jour\n\n"
     "📊 *S'informer*\n"
     "• /prix `AAPL` — dernier cours\n"
@@ -349,6 +351,28 @@ async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("👥 Consultation de l'équipe…")
     votes = await asyncio.to_thread(_svc(context).team_votes, raw)
     await msg.edit_text(team_block(raw, votes), parse_mode=MD)
+
+
+async def saison(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from ..formatting import season_block
+    s, upcoming, nh = await asyncio.to_thread(_svc(context).season)
+    await update.message.reply_text(season_block(s, upcoming, nh), parse_mode=MD)
+
+
+async def risque(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("🌐 Évaluation du climat de risque (VIX + actus)…")
+    rc = await asyncio.to_thread(_svc(context).risk_climate)
+    lines = ["🌐 *Climat de risque macro / géopolitique*",
+             f"Verdict : *{rc.label}*  (biais {rc.bias:+.2f})", "",
+             f"📉 {rc.vix_note}",
+             f"📰 Tension géopolitique dans l'actu : {rc.geo_score*100:.0f}%"]
+    if rc.hot_headlines:
+        lines.append("\n*Titres sensibles*")
+        for h in rc.hot_headlines:
+            safe = h.replace("*", " ").replace("_", " ").replace("[", " ")
+            lines.append(f"• {safe}")
+    lines.append("\n_ℹ️ Info de contexte. Le mode autonome gère déjà ce risque via le filtre de régime (S&P)._")
+    await msg.edit_text("\n".join(lines), parse_mode=MD, disable_web_page_preview=True)
 
 
 async def univers(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1102,6 +1126,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["saison", "season"], saison))
+    app.add_handler(CommandHandler(["risque", "risk", "geopolitique"], risque))
     app.add_handler(CommandHandler(["univers", "universe"], univers))
     app.add_handler(CommandHandler(["alerte", "alert"], alerte))
     app.add_handler(CommandHandler("alertes", alertes))

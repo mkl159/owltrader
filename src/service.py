@@ -149,6 +149,20 @@ class MarketService:
         trends = [aggregate_trend(a, df) for a, df in histories.items()]
         return aggregate_market(trends)
 
+    def season(self):
+        """Contexte saisonnier + jours fériés (aucun appel réseau)."""
+        from .seasonality import days_to_next_holiday, seasonal_context, upcoming_holidays
+        return seasonal_context(), upcoming_holidays(days=150), days_to_next_holiday()
+
+    def risk_climate(self):
+        """Climat de risque macro/géopolitique : VIX + scan d'actus."""
+        from .news import get_news
+        from .risk_climate import assess
+        q = self.quote("INDEX:^VIX")
+        vix = q.price if q else None
+        titles = [it.title for it in get_news("INDEX:^GSPC", 12)]
+        return assess(vix, titles)
+
     def team_votes(self, raw: str) -> dict | None:
         """Vote de chaque stratégie de l'équipe pour un actif (transparence des décisions)."""
         from .strategies import votes_now
