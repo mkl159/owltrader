@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .indicators.technical import rsi, sma
 
 
 def position_series(

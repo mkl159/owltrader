@@ -93,10 +93,8 @@ def aggregate_trend(symbol: str, df: pd.DataFrame, sentiment: float | None = Non
     if sentiment is not None and abs(sentiment) > 0.05:
         comp["actus"] = max(-1.5, min(1.5, sentiment * 1.5))
 
-    # Agrégation normalisée en -100..100
+    # Agrégation normalisée en -100..100 (borne = somme des poids max possibles)
     total = sum(comp.values())
-    max_total = sum(abs(v) if v != 0 else 1.0 for v in comp.values()) or 1.0
-    # borne théorique : poids max possibles
     weight_cap = 1 + 1.5 + 1.5 + 1 + 1 + 1 + 1 + 1 + 1.5  # ~10.5
     score = max(-100.0, min(100.0, total / weight_cap * 100))
 

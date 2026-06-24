@@ -8,7 +8,7 @@ from typing import Optional
 
 import pandas as pd
 
-from ..models import Quote, now_utc
+from ..models import Quote
 from ..symbols import Asset
 from .base import DataProvider
 
