@@ -102,21 +102,31 @@ class MarketService:
                     out[futures[fut]] = df
         return out
 
+    def _paper_conf(self):
+        from .config import CONFIG
+        return CONFIG.get("paper", {})
+
     def simulate_portfolio(self, universe: list[str], capital: float = 1000.0,
                            period: str | None = None, **kw):
         """Simulation historique du mode autonome (preuve de rentabilité + courbe)."""
         from .paper import simulate
-        from .config import CONFIG
-        period = period or CONFIG.get("paper", {}).get("backtest_period", "5y")
-        return simulate(self.fetch_histories(universe, period=period), capital=capital, **kw)
+        pc = self._paper_conf()
+        period = period or pc.get("backtest_period", "5y")
+        hist = self.fetch_histories(universe, period=period)
+        if pc.get("regime_filter", False) and "market_df" not in kw:
+            kw["market_df"] = hist.get(pc.get("regime_symbol", "INDEX:^GSPC"))
+        return simulate(hist, capital=capital, **kw)
 
     def optimize_strategy(self, universe: list[str], capital: float = 1000.0,
                           period: str | None = None, **fixed):
         """Auto-tuning : meilleurs paramètres sur l'historique. -> (params, SimResult)."""
         from .paper.optimizer import optimize
-        from .config import CONFIG
-        period = period or CONFIG.get("paper", {}).get("backtest_period", "5y")
-        return optimize(self.fetch_histories(universe, period=period), capital=capital, **fixed)
+        pc = self._paper_conf()
+        period = period or pc.get("backtest_period", "5y")
+        hist = self.fetch_histories(universe, period=period)
+        if pc.get("regime_filter", False) and "market_df" not in fixed:
+            fixed["market_df"] = hist.get(pc.get("regime_symbol", "INDEX:^GSPC"))
+        return optimize(hist, capital=capital, **fixed)
 
     def should_hold(self, raw: str, **params) -> bool:
         """Décision live de la stratégie : faut-il détenir cet actif maintenant ?"""

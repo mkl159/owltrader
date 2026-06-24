@@ -42,6 +42,8 @@ DEFAULTS = {
         "stop_loss_pct": 25,    # vente auto si une position perd plus de X% depuis l'achat
         "max_dd_pause": 0,      # 0 = désactivé (la sortie de tendance gère déjà les krachs)
         "backtest_period": "5y",  # fenêtre de simulation/auto-réglage (robustesse multi-régimes)
+        "regime_filter": True,    # n'acheter que si le marché (S&P) est au-dessus de sa MM200
+        "regime_symbol": "INDEX:^GSPC",
     },
     "signaux": {
         "rsi_survente": 30,

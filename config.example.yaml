@@ -65,6 +65,8 @@ paper:
   stop_loss_pct: 25      # filet large quasi gratuit (protège d'un actif qui s'effondre)
   max_dd_pause: 0        # coupe-circuit DÉSACTIVÉ : il ratait les reprises et plombait le rendement
   backtest_period: 5y    # fenêtre de simulation / auto-réglage (5 ans = plusieurs régimes)
+  regime_filter: true    # n'acheter que si le marché (S&P 500) est au-dessus de sa MM200 (anti-bear)
+  regime_symbol: "INDEX:^GSPC"
 
 # Moteur de signaux
 signaux:

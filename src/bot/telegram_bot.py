@@ -286,10 +286,24 @@ async def tendance(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(trend_block(t), parse_mode=MD)
 
 
+def _regime_line(svc) -> str:
+    pc = CONFIG.get("paper", {})
+    if not pc.get("regime_filter"):
+        return ""
+    from ..regime import market_ok_now
+    mkt = svc.history(pc.get("regime_symbol", "INDEX:^GSPC"), period="1y")
+    ok = market_ok_now(mkt) if mkt is not None else True
+    return ("\n\n🟢 *Régime favorable* : le bot autonome peut acheter."
+            if ok else
+            "\n\n🔴 *Régime défavorable* : le bot autonome n'ouvre plus de position (S&P sous sa MM200).")
+
+
 async def marche(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🌍 Analyse de la tendance générale du marché…")
-    m = await asyncio.to_thread(_svc(context).market_trend, CONFIG.get("univers_scan", []))
-    await msg.edit_text(market_block(m), parse_mode=MD)
+    svc = _svc(context)
+    m = await asyncio.to_thread(svc.market_trend, CONFIG.get("univers_scan", []))
+    line = await asyncio.to_thread(_regime_line, svc)
+    await msg.edit_text(market_block(m) + line, parse_mode=MD)
 
 
 async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -653,7 +667,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "marche":
         await q.edit_message_text("🌍 Analyse de la tendance générale du marché…")
         m = await asyncio.to_thread(_svc(context).market_trend, CONFIG.get("univers_scan", []))
-        return await q.edit_message_text(market_block(m), parse_mode=MD, reply_markup=back_button())
+        line = await asyncio.to_thread(_regime_line, _svc(context))
+        return await q.edit_message_text(market_block(m) + line, parse_mode=MD, reply_markup=back_button())
     if data == "agr_menu":
         return await q.edit_message_text(
             "🎚️ *Niveau d'agressivité*\n🛡️ Prudent · ⚖️ Normale · 🔥 Agressif\n"

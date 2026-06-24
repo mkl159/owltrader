@@ -76,13 +76,18 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
                              "motif": "stop-loss" if stop_hit else "signal"})
             del held[a]
 
-    # --- Coupe-circuit : pause des achats si trop de pertes depuis le sommet ---
+    # --- Coupe-circuit + filtre de régime : conditions de pause des achats ---
     equity_now = cash + sum(held[a]["quantity"] * prices[a] for a in held if a in prices)
     paused = False
     if ddp > 0:
         curve = [e for _, e in db.paper_equity_curve(chat_id)]
         peak = max(curve + [equity_now, acc["capital"]])
         paused = equity_now < peak * (1 - ddp)
+    if not paused and paper_cfg.get("regime_filter"):
+        from ..regime import market_ok_now
+        mkt = hist.get(paper_cfg.get("regime_symbol", "INDEX:^GSPC"))
+        if mkt is not None and not market_ok_now(mkt):
+            paused = True  # marché global baissier : on n'ouvre pas de position
 
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
