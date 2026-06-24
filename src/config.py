@@ -36,6 +36,9 @@ DEFAULTS = {
         "max_positions": 5,     # nombre max de positions simultanées
         "alloc_pct": 20,        # % du capital investi par position
         "devise": "EUR",
+        # Risk manager (assurance anti-krach : faible coût en temps normal, plafonne les pertes)
+        "stop_loss_pct": 15,    # vente auto si une position perd plus de X% depuis l'achat
+        "max_dd_pause": 25,     # coupe-circuit : on cesse d'acheter si le compte perd +de X% depuis son sommet
     },
     "signaux": {
         "rsi_survente": 30,

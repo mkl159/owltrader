@@ -55,6 +55,8 @@ def simulate(
     long: int = 50,
     rsi_entry_max: float = 70,
     rsi_exit: float = 80,
+    stop_loss_pct: float = 0.0,
+    max_dd_pause: float = 0.0,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
     histories = {k: v for k, v in histories.items() if v is not None and "close" in v and len(v) > long + 5}
@@ -82,13 +84,18 @@ def simulate(
     fees_total = 0.0
     equity_points = []
 
+    sl = stop_loss_pct / 100.0 if stop_loss_pct else 0.0
+    ddp = max_dd_pause / 100.0 if max_dd_pause else 0.0
+    peak = capital
+
     for t in dates:
-        # --- VENTES ---
+        # --- VENTES (stratégie OU stop-loss du risk manager) ---
         for asset in list(holdings):
-            if desired_df.at[t, asset] == 0:
-                price = closes_df.at[t, asset]
-                if pd.isna(price):
-                    continue
+            price = closes_df.at[t, asset]
+            if pd.isna(price):
+                continue
+            stop_hit = sl > 0 and price <= entry[asset]["price"] * (1 - sl)
+            if desired_df.at[t, asset] == 0 or stop_hit:
                 qty = holdings.pop(asset)
                 gross = qty * price
                 fee = courtage(gross, fee_pct, fee_min)
@@ -97,11 +104,17 @@ def simulate(
                 ep = entry.pop(asset)
                 pnl = (price - ep["price"]) * qty - fee - ep["fee"]
                 trades.append({"date": t, "asset": asset, "side": "VENTE", "qty": qty,
-                               "price": price, "fee": fee, "pnl": pnl})
+                               "price": price, "fee": fee, "pnl": pnl,
+                               "motif": "stop-loss" if stop_hit else "signal"})
+
+        # --- Coupe-circuit : si trop de pertes depuis le sommet, on cesse d'acheter ---
+        equity_pre = cash + sum(holdings[a] * closes_df.at[t, a] for a in holdings)
+        peak = max(peak, equity_pre)
+        paused = ddp > 0 and equity_pre < peak * (1 - ddp)
 
         # --- ACHATS ---
         free = max_positions - len(holdings)
-        if free > 0 and cash > fee_min + 10:
+        if free > 0 and cash > fee_min + 10 and not paused:
             equity_now = cash + sum(holdings[a] * closes_df.at[t, a] for a in holdings)
             cands = [a for a in desired_df.columns
                      if desired_df.at[t, a] == 1 and a not in holdings and not pd.isna(closes_df.at[t, a])]

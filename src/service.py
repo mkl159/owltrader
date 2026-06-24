@@ -133,6 +133,15 @@ class MarketService:
         trends = [aggregate_trend(a, df) for a, df in histories.items()]
         return aggregate_market(trends)
 
+    def team_votes(self, raw: str) -> dict | None:
+        """Vote de chaque stratégie de l'équipe pour un actif (transparence des décisions)."""
+        from .strategies import votes_now
+        asset = Asset.parse(raw)
+        df = self.history(asset.raw, period="1y")
+        if df is None:
+            return None
+        return votes_now(df)
+
     def signal_for(self, raw: str) -> Optional[Signal]:
         """Signal seul (sans cotation séparée) — léger, pour le scan de marché."""
         asset = Asset.parse(raw)

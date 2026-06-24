@@ -50,16 +50,20 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
         except Exception:  # noqa: BLE001
             continue
 
+    sl = paper_cfg.get("stop_loss_pct", 0) / 100.0
+    ddp = paper_cfg.get("max_dd_pause", 0) / 100.0
+
     cash = acc["cash"]
     held = {p["asset"]: p for p in db.paper_positions(chat_id)}
     executed: list[dict] = []
 
-    # --- VENTES : on solde ce que la stratégie ne veut plus ---
+    # --- VENTES : la stratégie n'en veut plus OU stop-loss du risk manager ---
     for a, p in list(held.items()):
         if a not in prices:
             continue
-        if not wants.get(a, False):
-            price = prices[a]
+        price = prices[a]
+        stop_hit = sl > 0 and price <= p["entry_price"] * (1 - sl)
+        if not wants.get(a, False) or stop_hit:
             qty = p["quantity"]
             gross = qty * price
             fee = courtage(gross, fee_pct, fee_min)
@@ -67,13 +71,21 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
             pnl = (price - p["entry_price"]) * qty - fee - p["entry_fee"]
             db.paper_remove_position(chat_id, a)
             db.paper_record_trade(chat_id, a, "VENTE", qty, price, fee, pnl)
-            executed.append({"side": "VENTE", "asset": a, "quantity": qty,
-                             "price": price, "fee": fee, "pnl": pnl})
+            executed.append({"side": "VENTE", "asset": a, "quantity": qty, "price": price,
+                             "fee": fee, "pnl": pnl,
+                             "motif": "stop-loss" if stop_hit else "signal"})
             del held[a]
 
-    # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
-    free = max_pos - len(held)
+    # --- Coupe-circuit : pause des achats si trop de pertes depuis le sommet ---
     equity_now = cash + sum(held[a]["quantity"] * prices[a] for a in held if a in prices)
+    paused = False
+    if ddp > 0:
+        curve = [e for _, e in db.paper_equity_curve(chat_id)]
+        peak = max(curve + [equity_now, acc["capital"]])
+        paused = equity_now < peak * (1 - ddp)
+
+    # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
+    free = 0 if paused else max_pos - len(held)
     cands = [a for a in universe if wants.get(a) and a not in held and a in prices]
     for a in cands[: max(0, free)]:
         target = min(equity_now * alloc / 100.0, cash - fee_min)

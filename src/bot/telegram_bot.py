@@ -38,6 +38,7 @@ from ..formatting import (
     sim_block,
     signal_card,
     state_recap,
+    team_block,
     trade_log,
     trend_block,
 )
@@ -77,6 +78,7 @@ HELP = (
     "• /autotune — ré-régler la stratégie · /reset · /stopauto\n\n"
     "💡 *Pistes & marché*\n"
     "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
+    "• /equipe `AAPL` — le vote de l'équipe de stratégies\n"
     "• /tendance `AAPL` — tendance agrégée (multi-sources)\n"
     "• /marche — tendance générale du marché\n"
     "• /movers — plus fortes hausses/baisses du jour\n\n"
@@ -290,6 +292,15 @@ async def marche(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(market_block(m), parse_mode=MD)
 
 
+async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage : /equipe AAPL")
+    raw = Asset.parse(context.args[0]).raw
+    msg = await update.message.reply_text("👥 Consultation de l'équipe…")
+    votes = await asyncio.to_thread(_svc(context).team_votes, raw)
+    await msg.edit_text(team_block(raw, votes), parse_mode=MD)
+
+
 async def agressivite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not _db(context).paper_get(chat_id):
@@ -389,6 +400,7 @@ async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         _svc(context).simulate_portfolio, _universe(), cfg.get("capital", 1000),
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
+        stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
     )
     await msg.edit_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD)
     if r is not None:
@@ -421,6 +433,7 @@ async def _autotune_universe(context):
         _svc(context).optimize_strategy, _universe(), cfg.get("capital", 1000),
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
+        stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
     )
 
 
@@ -434,7 +447,8 @@ async def _run_auto_cycle(chat_id, context, announce: bool = False):
         await context.bot.send_message(
             chat_id,
             trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
-                      tr.get("pnl") if tr["side"] == "VENTE" else None, dev),
+                      tr.get("pnl") if tr["side"] == "VENTE" else None, dev,
+                      motif=tr.get("motif")),
             parse_mode=MD,
         )
     # état + point d'équity
@@ -699,7 +713,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         r = await asyncio.to_thread(
             _svc(context).simulate_portfolio, _universe(), cfg.get("capital", 1000),
             fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
-            max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20))
+            max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
+            stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0))
         await q.edit_message_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD,
                                   reply_markup=back_button("auto_menu"))
         if r is not None:
@@ -908,6 +923,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["movers", "mouvements"], movers_cmd))
     app.add_handler(CommandHandler(["tendance", "trend"], tendance))
     app.add_handler(CommandHandler(["marche", "market"], marche))
+    app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler(["agressivite", "agro"], agressivite))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))

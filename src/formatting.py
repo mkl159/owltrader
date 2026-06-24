@@ -144,6 +144,23 @@ def sim_block(r, devise: str = "EUR") -> str:
     )
 
 
+def team_block(symbol: str, votes: dict) -> str:
+    """Affiche le vote de chaque stratégie de l'équipe."""
+    if not votes:
+        return "👥 Équipe indisponible (données insuffisantes)."
+    noms = {"tendance": "📈 Suiveur de tendance", "momentum": "🚀 Momentum",
+            "retour_moyenne": "🔄 Retour à la moyenne"}
+    pour = sum(1 for v in votes.values() if v)
+    lines = [f"👥 *L'équipe sur {symbol}*", ""]
+    for k, label in noms.items():
+        v = votes.get(k)
+        lines.append(f"{'🟢 ACHÈTERAIT' if v else '⚪ s’abstient'} — {label}")
+    verdict = "🟢 plutôt favorable" if pour >= 2 else "⚪ prudente" if pour == 1 else "🔴 à l'écart"
+    lines.append(f"\n*Consensus : {pour}/3 → {verdict}*")
+    lines.append("_⚠️ Outil éducatif. La décision finale combine ces votes (tendance prioritaire)._")
+    return "\n".join(lines)
+
+
 def trend_block(t) -> str:
     """Tendance agrégée d'un actif, avec le détail des sources."""
     if t is None:
@@ -237,14 +254,15 @@ def state_recap(cash: float, invested: float, n_positions: int, equity: float,
 
 
 def trade_log(side: str, asset: str, qty: float, price: float, fee: float,
-              pnl: float | None = None, devise: str = "EUR") -> str:
+              pnl: float | None = None, devise: str = "EUR", motif: str | None = None) -> str:
     """Message court loggué dans le chat à chaque achat/vente autonome."""
     if side == "ACHAT":
         return (f"🟢 *ACHAT* {asset}\n{qty:.4g} @ {price:.2f} {devise} "
                 f"(frais {fee:.2f} {devise})")
     pnl_txt = f"\nRésultat : *{pnl:+.2f} {devise}*" if pnl is not None else ""
+    motif_txt = "\n🛑 _stop-loss déclenché (protection)_" if motif == "stop-loss" else ""
     return (f"🔴 *VENTE* {asset}\n{qty:.4g} @ {price:.2f} {devise} "
-            f"(frais {fee:.2f} {devise}){pnl_txt}")
+            f"(frais {fee:.2f} {devise}){pnl_txt}{motif_txt}")
 
 
 def backtest_block(r) -> str:

@@ -22,23 +22,17 @@ def position_series(
     rsi_entry_max: float = 70,
     rsi_exit: float = 80,
 ) -> pd.Series:
-    """Série 0/1 indiquant si l'on doit détenir l'actif chaque jour (avec mémoire d'état)."""
-    close = df["close"].astype(float)
-    s, l, r = sma(close, short), sma(close, long), rsi(close)
-    out = []
-    holding = False
-    for i in range(len(close)):
-        if pd.isna(s.iloc[i]) or pd.isna(l.iloc[i]) or pd.isna(r.iloc[i]):
-            out.append(0)
-            continue
-        if not holding:
-            if s.iloc[i] > l.iloc[i] and r.iloc[i] < rsi_entry_max:
-                holding = True
-        else:
-            if s.iloc[i] < l.iloc[i] or r.iloc[i] > rsi_exit:
-                holding = False
-        out.append(1 if holding else 0)
-    return pd.Series(out, index=close.index, dtype=int)
+    """Série 0/1 (détenir ou non) — décision de l'ÉQUIPE de stratégies (ensemble).
+
+    Délègue à l'ensemble pondéré (tendance + momentum + retour à la moyenne) ; cette
+    fonction reste l'unique point d'entrée partagé entre la simulation et le live.
+    """
+    from .strategies import ensemble_position_series
+    ps = ensemble_position_series(df, short=short, long=long,
+                                  rsi_entry_max=rsi_entry_max, rsi_exit=rsi_exit)
+    if ps is None or len(ps) == 0:
+        return pd.Series(dtype=int)
+    return ps
 
 
 def should_hold(df: pd.DataFrame, **kw) -> bool:
