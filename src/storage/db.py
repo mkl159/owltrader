@@ -75,8 +75,62 @@ class Storage:
                     chat_id INTEGER, day TEXT, equity REAL,
                     PRIMARY KEY (chat_id, day)
                 );
+                CREATE TABLE IF NOT EXISTS scan_universe (
+                    asset TEXT PRIMARY KEY
+                );
+                CREATE TABLE IF NOT EXISTS price_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    chat_id INTEGER, asset TEXT, target REAL,
+                    direction TEXT, created_at TEXT
+                );
                 """
             )
+
+    # --- Univers de scan/trading (modifiable, sinon défaut config) ---
+    def get_universe(self) -> list[str]:
+        with self._conn() as c:
+            rows = c.execute("SELECT asset FROM scan_universe ORDER BY asset").fetchall()
+        return [r["asset"] for r in rows]
+
+    def seed_universe(self, defaults: list[str]):
+        with self._conn() as c:
+            n = c.execute("SELECT COUNT(*) FROM scan_universe").fetchone()[0]
+            if n == 0:
+                c.executemany("INSERT OR IGNORE INTO scan_universe VALUES (?)",
+                              [(a,) for a in defaults])
+
+    def add_to_universe(self, asset: str):
+        with self._conn() as c:
+            c.execute("INSERT OR IGNORE INTO scan_universe VALUES (?)", (asset,))
+
+    def remove_from_universe(self, asset: str):
+        with self._conn() as c:
+            c.execute("DELETE FROM scan_universe WHERE asset=?", (asset,))
+
+    # --- Alertes de prix ---
+    def add_price_alert(self, chat_id: int, asset: str, target: float, direction: str):
+        with self._conn() as c:
+            c.execute(
+                "INSERT INTO price_alerts (chat_id, asset, target, direction, created_at) VALUES (?,?,?,?,?)",
+                (chat_id, asset, target, direction, datetime.now(timezone.utc).isoformat()),
+            )
+
+    def get_price_alerts(self, chat_id: int) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM price_alerts WHERE chat_id=? ORDER BY id", (chat_id,)).fetchall()
+        return [dict(r) for r in rows]
+
+    def all_price_alerts(self) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM price_alerts").fetchall()
+        return [dict(r) for r in rows]
+
+    def remove_price_alert(self, alert_id: int, chat_id: int | None = None):
+        with self._conn() as c:
+            if chat_id is None:
+                c.execute("DELETE FROM price_alerts WHERE id=?", (alert_id,))
+            else:
+                c.execute("DELETE FROM price_alerts WHERE id=? AND chat_id=?", (alert_id, chat_id))
 
     # --- Compte de paper-trading autonome ---
     def paper_open(self, chat_id: int, capital: float, devise: str = "EUR", params: str | None = None):

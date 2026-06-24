@@ -57,6 +57,7 @@ def simulate(
     rsi_exit: float = 80,
     stop_loss_pct: float = 0.0,
     max_dd_pause: float = 0.0,
+    trailing_stop_pct: float = 0.0,
     market_df=None,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
@@ -86,6 +87,7 @@ def simulate(
     equity_points = []
 
     sl = stop_loss_pct / 100.0 if stop_loss_pct else 0.0
+    ts = trailing_stop_pct / 100.0 if trailing_stop_pct else 0.0
     ddp = max_dd_pause / 100.0 if max_dd_pause else 0.0
     peak = capital
 
@@ -101,8 +103,10 @@ def simulate(
             price = closes_df.at[t, asset]
             if pd.isna(price):
                 continue
+            entry[asset]["peak"] = max(entry[asset].get("peak", entry[asset]["price"]), price)
             stop_hit = sl > 0 and price <= entry[asset]["price"] * (1 - sl)
-            if desired_df.at[t, asset] == 0 or stop_hit:
+            trail_hit = ts > 0 and price <= entry[asset]["peak"] * (1 - ts)
+            if desired_df.at[t, asset] == 0 or stop_hit or trail_hit:
                 qty = holdings.pop(asset)
                 gross = qty * price
                 fee = courtage(gross, fee_pct, fee_min)

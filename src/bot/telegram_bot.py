@@ -89,6 +89,10 @@ HELP = (
     "• /graph `AAPL` — graphique cours + RSI\n"
     "• /backtest `AAPL` — test d'une stratégie sur l'historique\n"
     "• /actu `AAPL` — actualités + sentiment\n\n"
+    "🔔 *Alertes & univers*\n"
+    "• /alerte `AAPL 200` — m'alerter au franchissement d'un prix\n"
+    "• /alertes — voir/supprimer mes alertes\n"
+    "• /univers — voir/modifier les actifs tradés (add/remove)\n\n"
     "👁️ *Surveillance*\n"
     "• /watch `AAPL` · /unwatch `AAPL` · /liste\n\n"
     "💼 *Portefeuille*\n"
@@ -250,7 +254,7 @@ async def idees(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _scan(context, klass: str | None = None):
-    universe = CONFIG.get("univers_scan", [])
+    universe = _universe()
     if klass:
         universe = [u for u in universe if u.startswith(f"{klass}:")]
     return await asyncio.to_thread(_svc(context).scan, universe, 5)
@@ -274,7 +278,7 @@ async def graph_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def movers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🚀 Recherche des plus forts mouvements…")
-    m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
+    m = await asyncio.to_thread(_svc(context).movers, _universe())
     await msg.edit_text(movers_block(m), parse_mode=MD)
 
 
@@ -302,7 +306,7 @@ def _regime_line(svc) -> str:
 async def marche(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = await update.message.reply_text("🌍 Analyse de la tendance générale du marché…")
     svc = _svc(context)
-    m = await asyncio.to_thread(svc.market_trend, CONFIG.get("univers_scan", []))
+    m = await asyncio.to_thread(svc.market_trend, _universe())
     line = await asyncio.to_thread(_regime_line, svc)
     await msg.edit_text(market_block(m) + line, parse_mode=MD)
 
@@ -347,6 +351,63 @@ async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(team_block(raw, votes), parse_mode=MD)
 
 
+async def univers(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Voir / modifier l'univers d'actifs scannés et tradés."""
+    db = _db(context)
+    db.seed_universe(CONFIG.get("univers_scan", []))
+    args = context.args
+    if args and args[0].lower() in ("add", "ajouter", "+"):
+        if len(args) < 2:
+            return await update.message.reply_text("Usage : /univers add BTC")
+        a = Asset.parse(args[1])
+        db.add_to_universe(a.raw)
+        return await update.message.reply_text(f"✅ {a.raw} ajouté à l'univers.")
+    if args and args[0].lower() in ("remove", "retirer", "-", "del"):
+        if len(args) < 2:
+            return await update.message.reply_text("Usage : /univers remove TSLA")
+        a = Asset.parse(args[1])
+        db.remove_from_universe(a.raw)
+        return await update.message.reply_text(f"🗑️ {a.raw} retiré de l'univers.")
+    u = db.get_universe()
+    txt = (f"🌐 *Univers de trading* ({len(u)} actifs)\n" +
+           "\n".join(f"• {x}" for x in u) +
+           "\n\n_Ajouter : /univers add BTC_\n_Retirer : /univers remove TSLA_")
+    await update.message.reply_text(txt, parse_mode=MD)
+
+
+async def alerte(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Crée une alerte de prix : /alerte AAPL 200"""
+    if len(context.args) < 2:
+        return await update.message.reply_text("Usage : /alerte AAPL 200  (m'alerter quand AAPL franchit 200)")
+    a = Asset.parse(context.args[0])
+    try:
+        target = float(context.args[1].replace(",", "."))
+    except ValueError:
+        return await update.message.reply_text("Prix invalide. Ex : /alerte AAPL 200")
+    q = await asyncio.to_thread(_svc(context).quote, a.raw)
+    if q is None:
+        return await update.message.reply_text("❌ Prix actuel indisponible pour cet actif.")
+    direction = "above" if target >= q.price else "below"
+    _db(context).add_price_alert(update.effective_chat.id, a.raw, target, direction)
+    arrow = "≥" if direction == "above" else "≤"
+    await update.message.reply_text(
+        f"🔔 Alerte créée : *{a.raw} {arrow} {target:g}*\n_(cours actuel : {q.price:g})_", parse_mode=MD)
+
+
+async def alertes(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    al = _db(context).get_price_alerts(update.effective_chat.id)
+    if not al:
+        return await update.message.reply_text("Aucune alerte de prix. Crée-en une : /alerte AAPL 200")
+    rows = []
+    lines = ["🔔 *Tes alertes de prix*"]
+    for a in al:
+        arrow = "≥" if a["direction"] == "above" else "≤"
+        lines.append(f"• #{a['id']} {a['asset']} {arrow} {a['target']:g}")
+        rows.append([InlineKeyboardButton(f"🗑️ Supprimer #{a['id']}", callback_data=f"delalert:{a['id']}")])
+    await update.message.reply_text("\n".join(lines), parse_mode=MD,
+                                    reply_markup=InlineKeyboardMarkup(rows))
+
+
 async def agressivite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if not _db(context).paper_get(chat_id):
@@ -382,8 +443,16 @@ def _paper_cfg() -> dict:
     return CONFIG.get("paper", {})
 
 
+_DB_REF = None  # référence partagée vers le stockage (pour _universe sans contexte)
+
+
 def _universe() -> list[str]:
-    return CONFIG.get("univers_scan", [])
+    """Univers de scan/trading : DB si personnalisé, sinon défaut config."""
+    if _DB_REF is not None:
+        u = _DB_REF.get_universe()
+        if u:
+            return u
+    return _universe()
 
 
 async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -694,11 +763,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=ideas_keyboard(signals))
     if data == "movers":
         await q.edit_message_text("🚀 Recherche des plus forts mouvements…")
-        m = await asyncio.to_thread(_svc(context).movers, CONFIG.get("univers_scan", []))
+        m = await asyncio.to_thread(_svc(context).movers, _universe())
         return await q.edit_message_text(movers_block(m), parse_mode=MD, reply_markup=back_button())
     if data == "marche":
         await q.edit_message_text("🌍 Analyse de la tendance générale du marché…")
-        m = await asyncio.to_thread(_svc(context).market_trend, CONFIG.get("univers_scan", []))
+        m = await asyncio.to_thread(_svc(context).market_trend, _universe())
         line = await asyncio.to_thread(_regime_line, _svc(context))
         return await q.edit_message_text(market_block(m) + line, parse_mode=MD, reply_markup=back_button())
     if data == "agr_menu":
@@ -717,6 +786,18 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await q.edit_message_text(
             f"🎚️ Agressivité réglée sur *{name}*.", parse_mode=MD,
             reply_markup=back_button("auto_menu"))
+    if data.startswith("delalert:"):
+        db.remove_price_alert(int(data.split(":", 1)[1]), chat_id)
+        al = db.get_price_alerts(chat_id)
+        if not al:
+            return await q.edit_message_text("🔔 Alerte supprimée. Plus aucune alerte.")
+        rows, lines = [], ["🔔 *Tes alertes de prix*"]
+        for a in al:
+            arrow = "≥" if a["direction"] == "above" else "≤"
+            lines.append(f"• #{a['id']} {a['asset']} {arrow} {a['target']:g}")
+            rows.append([InlineKeyboardButton(f"🗑️ Supprimer #{a['id']}", callback_data=f"delalert:{a['id']}")])
+        return await q.edit_message_text("\n".join(lines), parse_mode=MD,
+                                         reply_markup=InlineKeyboardMarkup(rows))
     if data == "auto_menu":
         acc = db.paper_get(chat_id)
         active = bool(acc and acc.get("active"))
@@ -919,6 +1000,36 @@ async def auto_bilan_job(context: ContextTypes.DEFAULT_TYPE):
             log.warning("Bilan auto %s : %s", chat_id, e)
 
 
+async def alerts_job(context: ContextTypes.DEFAULT_TYPE):
+    """Vérifie les alertes de prix et notifie quand un seuil est franchi."""
+    db: Storage = context.application.bot_data["db"]
+    svc: MarketService = context.application.bot_data["svc"]
+    alerts = db.all_price_alerts()
+    if not alerts:
+        return
+    prices: dict[str, float] = {}
+    for raw in {a["asset"] for a in alerts}:
+        q = await asyncio.to_thread(svc.quote, raw)
+        if q is not None and q.price == q.price:  # écarte NaN
+            prices[raw] = q.price
+    for a in alerts:
+        p = prices.get(a["asset"])
+        if p is None:
+            continue
+        hit = (a["direction"] == "above" and p >= a["target"]) or \
+              (a["direction"] == "below" and p <= a["target"])
+        if hit:
+            arrow = "≥" if a["direction"] == "above" else "≤"
+            try:
+                await context.bot.send_message(
+                    a["chat_id"],
+                    f"🔔 *Alerte prix atteinte* : {a['asset']} {arrow} {a['target']:g}\n"
+                    f"Cours actuel : *{p:g}*", parse_mode=MD)
+            except Exception:  # noqa: BLE001
+                pass
+            db.remove_price_alert(a["id"])
+
+
 async def backup_job(context: ContextTypes.DEFAULT_TYPE):
     """Sauvegarde quotidienne de la base (rotation : 7 dernières)."""
     db: Storage = context.application.bot_data["db"]
@@ -972,7 +1083,11 @@ def build_application() -> Application:
         )
     app = Application.builder().token(token).build()
     app.bot_data["svc"] = MarketService()
-    app.bot_data["db"] = Storage()
+    db = Storage()
+    db.seed_universe(CONFIG.get("univers_scan", []))
+    app.bot_data["db"] = db
+    global _DB_REF
+    _DB_REF = db
 
     app.add_handler(CommandHandler(["start"], start))
     app.add_handler(CommandHandler(["aide", "help"], help_cmd))
@@ -987,6 +1102,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["univers", "universe"], univers))
+    app.add_handler(CommandHandler(["alerte", "alert"], alerte))
+    app.add_handler(CommandHandler("alertes", alertes))
     app.add_handler(CommandHandler(["agressivite", "agro"], agressivite))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))
@@ -1018,4 +1136,5 @@ def build_application() -> Application:
     app.job_queue.run_daily(auto_bilan_job, time=dtime(hour=18, minute=0))
     app.job_queue.run_daily(autotune_job, time=dtime(hour=7, minute=0))
     app.job_queue.run_daily(backup_job, time=dtime(hour=6, minute=0))
+    app.job_queue.run_repeating(alerts_job, interval=auto_min * 60, first=60)
     return app
