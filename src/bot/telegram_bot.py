@@ -887,6 +887,21 @@ async def auto_bilan_job(context: ContextTypes.DEFAULT_TYPE):
             log.warning("Bilan auto %s : %s", chat_id, e)
 
 
+async def backup_job(context: ContextTypes.DEFAULT_TYPE):
+    """Sauvegarde quotidienne de la base (rotation : 7 dernières)."""
+    db: Storage = context.application.bot_data["db"]
+    try:
+        dest = await asyncio.to_thread(db.backup)
+        log.info("Sauvegarde base -> %s", dest)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Sauvegarde échouée : %s", e)
+
+
+async def on_error(update: object, context: ContextTypes.DEFAULT_TYPE):
+    """Gestionnaire d'erreurs global : journalise toute exception non interceptée."""
+    log.error("Erreur non interceptée : %s", context.error, exc_info=context.error)
+
+
 async def autotune_job(context: ContextTypes.DEFAULT_TYPE):
     """S'ajuste tout seul : ré-optimise la stratégie et l'applique aux comptes actifs."""
     db: Storage = context.application.bot_data["db"]
@@ -956,6 +971,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["simuler", "simulation"], simuler))
     app.add_handler(CommandHandler(["autotune", "regler"], autotune))
     app.add_handler(CallbackQueryHandler(on_button))
+    app.add_error_handler(on_error)
 
     freq_min = CONFIG.get("frequences", {}).get("actions", 15)
     auto_min = CONFIG.get("frequences", {}).get("auto", 5)
@@ -968,4 +984,5 @@ def build_application() -> Application:
     app.job_queue.run_daily(digest_job, time=dtime(hour=8, minute=0))
     app.job_queue.run_daily(auto_bilan_job, time=dtime(hour=18, minute=0))
     app.job_queue.run_daily(autotune_job, time=dtime(hour=7, minute=0))
+    app.job_queue.run_daily(backup_job, time=dtime(hour=6, minute=0))
     return app

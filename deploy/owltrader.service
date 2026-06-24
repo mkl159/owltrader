@@ -1,0 +1,16 @@
+[Unit]
+Description=OwlTrader - bot Telegram d'analyse multi-marchés
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mikael
+WorkingDirectory=/home/mikael/Bureau/analyseur-bourse
+ExecStart=/home/mikael/Bureau/analyseur-bourse/.venv/bin/python -m src.main
+Restart=always
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

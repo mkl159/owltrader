@@ -22,6 +22,19 @@ class Storage:
         c.row_factory = sqlite3.Row
         return c
 
+    def backup(self, dest_dir: Path | str | None = None, keep: int = 7) -> Path:
+        """Sauvegarde à chaud de la base (API backup SQLite) + rotation des anciennes copies."""
+        dest_dir = Path(dest_dir) if dest_dir else self.path.parent / "backups"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d")
+        dest = dest_dir / f"owltrader-{stamp}.db"
+        with sqlite3.connect(self.path) as src, sqlite3.connect(dest) as dst:
+            src.backup(dst)
+        backups = sorted(dest_dir.glob("owltrader-*.db"))
+        for old in backups[:-keep]:
+            old.unlink(missing_ok=True)
+        return dest
+
     def _init(self):
         with self._conn() as c:
             c.executescript(

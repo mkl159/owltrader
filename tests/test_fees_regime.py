@@ -47,3 +47,14 @@ def test_storage_antispam():
         db = Storage(Path(d) / "t.db")
         assert db.should_alert(1, "STOCK:X", "ACHETER", 4) is True
         assert db.should_alert(1, "STOCK:X", "ACHETER", 4) is False  # bloqué
+
+
+def test_storage_backup():
+    with tempfile.TemporaryDirectory() as d:
+        db = Storage(Path(d) / "t.db")
+        db.paper_open(7, 1000, "EUR")
+        dest = db.backup(Path(d) / "bk")
+        assert dest.exists() and dest.stat().st_size > 0
+        # la sauvegarde est une base lisible
+        restored = Storage(dest)
+        assert restored.paper_get(7)["cash"] == 1000

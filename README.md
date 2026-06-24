@@ -59,6 +59,21 @@ Commandes du bot :
 portefeuille** (signal de vente ou perte importante), et **résumé quotidien**.
 Tout est aussi pilotable **aux boutons** via `/menu`.
 
+## 🔁 Faire tourner en 24/7
+
+Pour que le bot reste actif en permanence (et redémarre seul en cas de crash) :
+
+```bash
+# Option A — service systemd (démarre au boot, recommandé) :
+sudo bash deploy/install-systemd.sh
+journalctl -u owltrader -f        # voir les logs
+
+# Option B — sans sudo, supervision dans un terminal (ou tmux/screen) :
+bash deploy/run.sh
+```
+
+La base SQLite est **sauvegardée automatiquement chaque jour** (`data/backups/`, 7 dernières copies).
+
 ## 🆓 100 % gratuit
 
 OwlTrader fonctionne **sans aucune clé payante** (yfinance, Stooq, CoinGecko, Frankfurter, flux RSS…).
