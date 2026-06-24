@@ -75,7 +75,8 @@ HELP = (
     "• /bilan — où il en est + graphique\n"
     "• /simuler — backtest + métriques pro (Sharpe, Sortino, Calmar…)\n"
     "• /agressivite — prudent / normale / agressif\n"
-    "• /autotune — ré-régler la stratégie · /reset · /stopauto\n\n"
+    "• /autotune — ré-régler la stratégie · /reset · /stopauto\n"
+    "• /alpaca — connexion à un vrai compte paper-trading (API)\n\n"
     "💡 *Pistes & marché*\n"
     "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
     "• /equipe `AAPL` — le vote de l'équipe de stratégies\n"
@@ -304,6 +305,37 @@ async def marche(update: Update, context: ContextTypes.DEFAULT_TYPE):
     m = await asyncio.to_thread(svc.market_trend, CONFIG.get("univers_scan", []))
     line = await asyncio.to_thread(_regime_line, svc)
     await msg.edit_text(market_block(m) + line, parse_mode=MD)
+
+
+async def alpaca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Vérifie la connexion au compte Alpaca (paper-trading réel via API)."""
+    msg = await update.message.reply_text("🦙 Connexion à Alpaca…")
+
+    def _fetch():
+        from ..brokers import AlpacaBroker
+        b = AlpacaBroker()
+        return b.get_account(), b.get_positions()
+
+    try:
+        acc, pos = await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001
+        return await msg.edit_text(
+            "❌ *Alpaca non connecté.*\n"
+            f"_{str(e)[:200]}_\n\n"
+            "Pour l'activer : crée un compte gratuit sur *alpaca.markets*, génère des clés "
+            "*paper trading*, et ajoute dans `.env` :\n"
+            "`ALPACA_API_KEY_ID=...`\n`ALPACA_API_SECRET=...`",
+            parse_mode=MD)
+    lines = [f"🦙 *Alpaca paper* — compte {acc['status']}",
+             f"💵 Cash : {acc['cash']:.2f} {acc['currency']}",
+             f"📊 Équity : *{acc['equity']:.2f} {acc['currency']}*", ""]
+    if pos:
+        lines.append("*Positions*")
+        for p in pos:
+            lines.append(f"• {p['symbol']} : {p['qty']:g} ({p['unrealized_plpc']:+.1f}%)")
+    else:
+        lines.append("Aucune position ouverte.")
+    await msg.edit_text("\n".join(lines), parse_mode=MD)
 
 
 async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -954,6 +986,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["tendance", "trend"], tendance))
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
+    app.add_handler(CommandHandler("alpaca", alpaca_cmd))
     app.add_handler(CommandHandler(["agressivite", "agro"], agressivite))
     app.add_handler(CommandHandler("actu", actu))
     app.add_handler(CommandHandler("watch", watch))
