@@ -61,6 +61,22 @@ def meanrev_position(df: pd.DataFrame) -> pd.Series:
     return _state_machine(enter, exit_)
 
 
+def breakout_position(df: pd.DataFrame, entry_window: int = 20, exit_window: int = 10) -> pd.Series:
+    """Cassure de Donchian — le système des Turtle Traders (Richard Dennis).
+
+    Achat à la cassure du plus-haut sur `entry_window` jours, sortie sous le plus-bas
+    sur `exit_window` jours. Approche trend-following historique et robuste.
+    """
+    close = df["close"].astype(float)
+    high = df["high"].astype(float) if "high" in df.columns else close
+    low = df["low"].astype(float) if "low" in df.columns else close
+    upper = high.rolling(entry_window).max().shift(1)
+    lower = low.rolling(exit_window).min().shift(1)
+    enter = close >= upper
+    exit_ = close <= lower
+    return _state_machine(enter, exit_)
+
+
 def ensemble_position_series(df: pd.DataFrame, short: int = 20, long: int = 50,
                              rsi_entry_max: float = 70, rsi_exit: float = 80,
                              w_trend: float = 0.5, w_mom: float = 0.3, w_mr: float = 0.2,
@@ -81,7 +97,8 @@ def votes_now(df: pd.DataFrame, **params) -> dict:
     out = {}
     for name, fn in (("tendance", lambda d: trend_position(d, **sp)),
                      ("momentum", momentum_position),
-                     ("retour_moyenne", meanrev_position)):
+                     ("retour_moyenne", meanrev_position),
+                     ("turtle", breakout_position)):
         try:
             s = fn(df)
             out[name] = bool(s.iloc[-1]) if len(s) else False

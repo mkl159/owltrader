@@ -44,6 +44,10 @@ DEFAULTS = {
         "backtest_period": "5y",  # fenêtre de simulation/auto-réglage (robustesse multi-régimes)
         "regime_filter": True,    # n'acheter que si le marché (S&P) est au-dessus de sa MM200
         "regime_symbol": "INDEX:^GSPC",
+        # Dimensionnement par volatilité (façon Ray Dalio / Turtles) : investir moins sur
+        # les actifs volatils. 0.20 retenu car robuste sur 5 ANS ET 10 ANS (le 0.30 brillait
+        # à 10 ans mais était fragile à 5 ans). Améliore Sharpe et réduit le drawdown.
+        "vol_target": 0.20,       # volatilité annualisée cible par position (0 = taille fixe)
     },
     "signaux": {
         "rsi_survente": 30,

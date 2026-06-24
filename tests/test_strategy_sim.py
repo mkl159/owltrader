@@ -6,7 +6,7 @@ import numpy as np
 
 from src.paper.simulator import simulate
 from src.strategy import position_series
-from src.strategies import ensemble_position_series
+from src.strategies import breakout_position, ensemble_position_series, votes_now
 
 
 def test_position_series_uptrend(uptrend):
@@ -20,6 +20,18 @@ def test_position_series_uptrend(uptrend):
 def test_ensemble_no_position_when_short(uptrend):
     short = uptrend.iloc[:30]
     assert len(ensemble_position_series(short)) == 0
+
+
+def test_breakout_turtle(uptrend):
+    b = breakout_position(uptrend)
+    assert set(b.unique()) <= {0, 1}
+    assert b.sum() > 0                    # une tendance haussière déclenche des cassures
+
+
+def test_team_votes_inclut_turtle(uptrend):
+    v = votes_now(uptrend)
+    assert "turtle" in v and "tendance" in v
+    assert all(isinstance(x, bool) for x in v.values())
 
 
 def test_simulate_rentable_en_hausse(universe_up):

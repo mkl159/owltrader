@@ -62,6 +62,7 @@ def simulate(
     seasonal_filter: bool = False,
     vix_df=None,
     vix_max: float = 0.0,
+    vol_target: float = 0.0,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
     histories = {k: v for k, v in histories.items() if v is not None and "close" in v and len(v) > long + 5}
@@ -77,6 +78,10 @@ def simulate(
         closes[asset] = df["close"].astype(float)
 
     closes_df = pd.DataFrame(closes).sort_index().ffill()
+    # Volatilité annualisée glissante (pour le dimensionnement par volatilité)
+    vol_df = None
+    if vol_target and vol_target > 0:
+        vol_df = closes_df.pct_change().rolling(20).std() * (252 ** 0.5)
     # ffill (et non fillna 0) : un jour sans cotation conserve l'état précédent
     # — sinon les actions seraient "vendues" chaque week-end puis rachetées (churn + frais).
     desired_df = pd.DataFrame(desired).reindex(closes_df.index).ffill().fillna(0).astype(int)
@@ -143,7 +148,12 @@ def simulate(
             cands = [a for a in desired_df.columns
                      if desired_df.at[t, a] == 1 and a not in holdings and not pd.isna(closes_df.at[t, a])]
             for a in cands[:free]:
-                target = min(equity_now * alloc_pct / 100.0, cash - fee_min)
+                base = equity_now * alloc_pct / 100.0
+                if vol_df is not None:
+                    v = vol_df.at[t, a]
+                    if pd.notna(v) and v > 0:
+                        base *= min(1.5, max(0.5, vol_target / v))  # moins sur les actifs volatils
+                target = min(base, cash - fee_min)
                 if target < 10:
                     continue
                 price = closes_df.at[t, a]

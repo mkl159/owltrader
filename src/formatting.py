@@ -166,19 +166,40 @@ def season_block(s, upcoming: list, next_hol) -> str:
     return "\n".join(lines)
 
 
+def masters_block() -> str:
+    """Crédite les traders célèbres dont OwlTrader applique les principes (validés)."""
+    return (
+        "🏆 *Les légendes derrière OwlTrader*\n\n"
+        "Le bot applique des règles éprouvées par de grands traders — et *seules celles qui "
+        "passent le backtest sur 5 ET 10 ans sont activées* :\n\n"
+        "📈 *Jesse Livermore* — « La tendance est ton amie, coupe tes pertes »\n"
+        "→ on suit la tendance et on sort dès qu'elle se retourne.\n\n"
+        "🛡️ *Paul Tudor Jones* — « Rien sous la moyenne 200 jours »\n"
+        "→ filtre de régime : on n'achète que si le S&P est au-dessus de sa MM200.\n\n"
+        "⚖️ *Ray Dalio* — risque équilibré & diversification\n"
+        "→ dimensionnement par volatilité : moins sur les actifs nerveux.\n\n"
+        "🐢 *Richard Dennis (Turtles)* — cassures de Donchian\n"
+        "→ stratégie Turtle présente dans l'équipe (vois /equipe).\n\n"
+        "✂️ *Ed Seykota* — « Cut losses, ride winners, manage risk »\n"
+        "→ stop-loss + on laisse courir les gagnants.\n\n"
+        "_Ce qui n'a pas passé le test (saisonnalité, filtre VIX…) reste en info, pas en décision._"
+    )
+
+
 def team_block(symbol: str, votes: dict) -> str:
     """Affiche le vote de chaque stratégie de l'équipe."""
     if not votes:
         return "👥 Équipe indisponible (données insuffisantes)."
     noms = {"tendance": "📈 Suiveur de tendance", "momentum": "🚀 Momentum",
-            "retour_moyenne": "🔄 Retour à la moyenne"}
+            "retour_moyenne": "🔄 Retour à la moyenne", "turtle": "🐢 Turtle (Dennis)"}
     pour = sum(1 for v in votes.values() if v)
+    n = len(noms)
     lines = [f"👥 *L'équipe sur {symbol}*", ""]
     for k, label in noms.items():
         v = votes.get(k)
         lines.append(f"{'🟢 ACHÈTERAIT' if v else '⚪ s’abstient'} — {label}")
-    verdict = "🟢 plutôt favorable" if pour >= 2 else "⚪ prudente" if pour == 1 else "🔴 à l'écart"
-    lines.append(f"\n*Consensus : {pour}/3 → {verdict}*")
+    verdict = "🟢 plutôt favorable" if pour >= n / 2 else "⚪ prudente" if pour >= 1 else "🔴 à l'écart"
+    lines.append(f"\n*Consensus : {pour}/{n} → {verdict}*")
     lines.append("_⚠️ Outil éducatif. La décision finale combine ces votes (tendance prioritaire)._")
     return "\n".join(lines)
 

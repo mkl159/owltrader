@@ -67,6 +67,7 @@ paper:
   backtest_period: 5y    # fenêtre de simulation / auto-réglage (5 ans = plusieurs régimes)
   regime_filter: true    # n'acheter que si le marché (S&P 500) est au-dessus de sa MM200 (anti-bear)
   regime_symbol: "INDEX:^GSPC"
+  vol_target: 0.20       # dimensionnement par volatilité (façon Dalio/Turtles ; robuste 5 & 10 ans)
 
 # Moteur de signaux
 signaux:

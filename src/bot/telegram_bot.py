@@ -80,6 +80,7 @@ HELP = (
     "💡 *Pistes & marché*\n"
     "• /idees — meilleures opportunités (filtre : /idees crypto)\n"
     "• /equipe `AAPL` — le vote de l'équipe de stratégies\n"
+    "• /maitres — les traders légendaires derrière le bot\n"
     "• /tendance `AAPL` — tendance agrégée (multi-sources)\n"
     "• /marche — tendance générale du marché\n"
     "• /saison — contexte saisonnier + jours fériés\n"
@@ -353,6 +354,11 @@ async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await msg.edit_text(team_block(raw, votes), parse_mode=MD)
 
 
+async def maitres(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from ..formatting import masters_block
+    await update.message.reply_text(masters_block(), parse_mode=MD)
+
+
 async def saison(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from ..formatting import season_block
     s, upcoming, nh = await asyncio.to_thread(_svc(context).season)
@@ -540,6 +546,7 @@ async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
         stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
+        vol_target=cfg.get("vol_target", 0),
     )
     await msg.edit_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD)
     if r is not None:
@@ -573,6 +580,7 @@ async def _autotune_universe(context):
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
         stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
+        vol_target=cfg.get("vol_target", 0),
     )
 
 
@@ -866,7 +874,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             _svc(context).simulate_portfolio, _universe(), cfg.get("capital", 1000),
             fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
             max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
-            stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0))
+            stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
+            vol_target=cfg.get("vol_target", 0))
         await q.edit_message_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD,
                                   reply_markup=back_button("auto_menu"))
         if r is not None:
@@ -1126,6 +1135,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["maitres", "legendes", "masters"], maitres))
     app.add_handler(CommandHandler(["saison", "season"], saison))
     app.add_handler(CommandHandler(["risque", "risk", "geopolitique"], risque))
     app.add_handler(CommandHandler(["univers", "universe"], univers))

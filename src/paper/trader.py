@@ -37,9 +37,11 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     max_pos = int(params.get("max_positions", paper_cfg.get("max_positions", 5)))
     alloc = params.get("alloc_pct", paper_cfg.get("alloc_pct", 20))
 
+    vt = paper_cfg.get("vol_target", 0) or 0
     hist = svc.fetch_histories(universe, period="1y")
     wants: dict[str, bool] = {}
     prices: dict[str, float] = {}
+    vols: dict[str, float] = {}
     for a, df in hist.items():
         try:
             last_close = float(df["close"].iloc[-1])
@@ -47,6 +49,10 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
                 continue  # cours manquant : on ne décide/trade pas cet actif ce tour-ci
             wants[a] = bool(position_series(df, **sp).iloc[-1])
             prices[a] = last_close
+            if vt > 0:
+                v = float(df["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
+                if v == v and v > 0:
+                    vols[a] = v
         except Exception:  # noqa: BLE001
             continue
 
@@ -93,7 +99,10 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     free = 0 if paused else max_pos - len(held)
     cands = [a for a in universe if wants.get(a) and a not in held and a in prices]
     for a in cands[: max(0, free)]:
-        target = min(equity_now * alloc / 100.0, cash - fee_min)
+        base = equity_now * alloc / 100.0
+        if vt > 0 and a in vols:
+            base *= min(1.5, max(0.5, vt / vols[a]))  # moins sur les actifs volatils
+        target = min(base, cash - fee_min)
         if target < 10:
             continue
         price = prices[a]
