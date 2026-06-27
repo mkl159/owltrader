@@ -65,6 +65,10 @@ def simulate(
     vix_max: float = 0.0,
     vol_target: float = 0.0,
     rank_lookback: int = 0,
+    rank_vol_adjust: bool = False,
+    graded_regime: bool = False,
+    max_corr: float = 0.0,
+    max_crypto: int = 0,
     adx_df=None,
     adx_min: float = 0.0,
     abs_mom_lookback: int = 0,
@@ -92,6 +96,19 @@ def simulate(
     mom_df = None
     if rank_lookback and rank_lookback > 0:
         mom_df = closes_df / closes_df.shift(rank_lookback) - 1
+        if rank_vol_adjust:  # momentum ajusté du risque (momentum / volatilité)
+            v = closes_df.pct_change().rolling(20).std()
+            mom_df = mom_df / v.replace(0, pd.NA)
+    # Rendements quotidiens (pour le plafond de corrélation)
+    rets_df = closes_df.pct_change() if max_corr and max_corr > 0 else None
+    # Régime gradué : facteur d'exposition selon la distance au-dessus de la MM200
+    grade = None
+    if graded_regime and market_df is not None:
+        from ..indicators.technical import sma as _sma
+        mc = market_df["close"].astype(float)
+        ratio = (mc / _sma(mc, 200) - 1).reindex(closes_df.index).ffill()
+        # 0% au-dessus -> facteur 0.6 ; +10% au-dessus -> facteur 1.4 (borné)
+        grade = (0.6 + (ratio / 0.10) * 0.8).clip(lower=0.4, upper=1.4)
     # Momentum absolu (Antonacci) : ne pas acheter un actif en momentum négatif
     abs_mom_df = None
     if abs_mom_lookback and abs_mom_lookback > 0:
@@ -178,8 +195,36 @@ def simulate(
             if mom_df is not None:
                 cands.sort(key=lambda a: (mom_df.at[t, a] if pd.notna(mom_df.at[t, a]) else -9e9),
                            reverse=True)
+            # Plafond de corrélation : on évite d'empiler des actifs qui bougent ensemble
+            if rets_df is not None:
+                win = rets_df.loc[:t].tail(60)
+                kept, selected = [], list(holdings.keys())
+                for a in cands:
+                    ok = True
+                    for b in selected:
+                        if a in win.columns and b in win.columns:
+                            c = win[a].corr(win[b])
+                            if pd.notna(c) and c > max_corr:
+                                ok = False
+                                break
+                    if ok:
+                        kept.append(a)
+                        selected.append(a)
+                cands = kept
+            # Plafond d'exposition crypto (classe très volatile et corrélée)
+            if max_crypto > 0:
+                n_crypto = sum(1 for h in holdings if h.startswith("CRYPTO:"))
+                pruned = []
+                for a in cands:
+                    if a.startswith("CRYPTO:"):
+                        if n_crypto >= max_crypto:
+                            continue
+                        n_crypto += 1
+                    pruned.append(a)
+                cands = pruned
+            gfac = float(grade.get(t, 1.0)) if grade is not None else 1.0
             for a in cands[:free]:
-                base = equity_now * alloc_pct / 100.0
+                base = equity_now * alloc_pct / 100.0 * gfac
                 if vol_df is not None:
                     v = vol_df.at[t, a]
                     if pd.notna(v) and v > 0:

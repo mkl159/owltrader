@@ -22,6 +22,21 @@ def test_ensemble_no_position_when_short(uptrend):
     assert len(ensemble_position_series(short)) == 0
 
 
+def test_adx_borne(uptrend):
+    from src.indicators.technical import adx
+    a = adx(uptrend).dropna()
+    assert (a >= 0).all() and (a <= 100).all()
+
+
+def test_simulate_options_recherche(universe_up):
+    # Les paramètres de recherche (défaut off + variantes) tournent sans casser
+    for kw in ({}, {"rank_vol_adjust": True, "rank_lookback": 21},
+               {"graded_regime": True}, {"max_corr": 0.8}, {"max_crypto": 1},
+               {"abs_mom_lookback": 60}):
+        r = simulate(universe_up, capital=1000, **kw)
+        assert r is not None and r.final_equity > 0
+
+
 def test_breakout_turtle(uptrend):
     b = breakout_position(uptrend)
     assert set(b.unique()) <= {0, 1}
