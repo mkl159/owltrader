@@ -39,6 +39,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
 
     vt = paper_cfg.get("vol_target", 0) or 0
     rlb = int(paper_cfg.get("rank_lookback", 0) or 0)
+    amlb = int(paper_cfg.get("abs_mom_lookback", 0) or 0)
+    ammin = paper_cfg.get("abs_mom_min", 0) or 0
     hist = svc.fetch_histories(universe, period="1y")
     wants: dict[str, bool] = {}
     prices: dict[str, float] = {}
@@ -104,6 +106,13 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
     cands = [a for a in universe if wants.get(a) and a not in held and a in prices]
+    if amlb > 0:  # momentum absolu : on écarte les actifs en baisse sur ~6 mois
+        def _abs_mom(a):
+            df = hist.get(a)
+            if df is None or len(df) <= amlb:
+                return None
+            return float(df["close"].iloc[-1] / df["close"].iloc[-1 - amlb] - 1)
+        cands = [a for a in cands if (_abs_mom(a) is not None and _abs_mom(a) >= ammin)]
     if rlb > 0:  # classe par momentum relatif : les plus forts d'abord
         cands.sort(key=lambda a: moms.get(a, -9e9), reverse=True)
     for a in cands[: max(0, free)]:

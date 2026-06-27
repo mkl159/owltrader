@@ -52,6 +52,10 @@ DEFAULTS = {
         # 21j (1 mois) retenu : améliore Sharpe ET drawdown sur 5 ANS ET 10 ANS (le 6 mois
         # brillait à 10 ans mais était fragile à 5 ans). 0 = ordre de la liste.
         "rank_lookback": 21,
+        # Momentum absolu (Antonacci) : ne pas acheter un actif en baisse sur N jours.
+        # Validé robuste 5 ET 10 ans (n'a jamais nui). 126j ≈ 6 mois.
+        "abs_mom_lookback": 126,
+        "abs_mom_min": 0.0,
     },
     "signaux": {
         "rsi_survente": 30,

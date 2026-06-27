@@ -59,11 +59,16 @@ def simulate(
     max_dd_pause: float = 0.0,
     trailing_stop_pct: float = 0.0,
     market_df=None,
+    regime_window: int = 200,
     seasonal_filter: bool = False,
     vix_df=None,
     vix_max: float = 0.0,
     vol_target: float = 0.0,
     rank_lookback: int = 0,
+    adx_df=None,
+    adx_min: float = 0.0,
+    abs_mom_lookback: int = 0,
+    abs_mom_min: float = 0.0,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
     histories = {k: v for k, v in histories.items() if v is not None and "close" in v and len(v) > long + 5}
@@ -87,6 +92,14 @@ def simulate(
     mom_df = None
     if rank_lookback and rank_lookback > 0:
         mom_df = closes_df / closes_df.shift(rank_lookback) - 1
+    # Momentum absolu (Antonacci) : ne pas acheter un actif en momentum négatif
+    abs_mom_df = None
+    if abs_mom_lookback and abs_mom_lookback > 0:
+        abs_mom_df = closes_df / closes_df.shift(abs_mom_lookback) - 1
+    # ADX (force de tendance) aligné sur le calendrier
+    adx_aligned = None
+    if adx_df is not None and adx_min > 0:
+        adx_aligned = adx_df.reindex(closes_df.index).ffill()
     # ffill (et non fillna 0) : un jour sans cotation conserve l'état précédent
     # — sinon les actions seraient "vendues" chaque week-end puis rachetées (churn + frais).
     desired_df = pd.DataFrame(desired).reindex(closes_df.index).ffill().fillna(0).astype(int)
@@ -108,7 +121,7 @@ def simulate(
     regime = None
     if market_df is not None:
         from ..regime import regime_series
-        regime = regime_series(market_df).reindex(closes_df.index).ffill().fillna(False)
+        regime = regime_series(market_df, regime_window).reindex(closes_df.index).ffill().fillna(False)
     # Filtre de risque (VIX) : pas d'achat quand la peur dépasse un seuil
     vix = None
     if vix_df is not None and vix_max > 0:
@@ -152,6 +165,15 @@ def simulate(
             equity_now = cash + sum(holdings[a] * closes_df.at[t, a] for a in holdings)
             cands = [a for a in desired_df.columns
                      if desired_df.at[t, a] == 1 and a not in holdings and not pd.isna(closes_df.at[t, a])]
+            # Filtre momentum absolu : on écarte les actifs en tendance négative
+            if abs_mom_df is not None:
+                cands = [a for a in cands
+                         if pd.notna(abs_mom_df.at[t, a]) and abs_mom_df.at[t, a] >= abs_mom_min]
+            # Filtre force de tendance (ADX) : seulement les tendances franches
+            if adx_aligned is not None:
+                cands = [a for a in cands
+                         if a in adx_aligned.columns and pd.notna(adx_aligned.at[t, a])
+                         and adx_aligned.at[t, a] >= adx_min]
             # Classement par momentum relatif : on prend les plus forts d'abord
             if mom_df is not None:
                 cands.sort(key=lambda a: (mom_df.at[t, a] if pd.notna(mom_df.at[t, a]) else -9e9),

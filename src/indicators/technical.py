@@ -44,6 +44,24 @@ def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     return tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
 
 
+def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
+    """ADX (force de tendance, méthode de Wilder). >25 = tendance franche."""
+    if not {"high", "low", "close"}.issubset(df.columns):
+        return pd.Series(dtype=float, index=df.index)
+    high, low, close = df["high"], df["low"], df["close"]
+    up = high.diff()
+    down = -low.diff()
+    plus_dm = ((up > down) & (up > 0)) * up.clip(lower=0)
+    minus_dm = ((down > up) & (down > 0)) * down.clip(lower=0)
+    prev_close = close.shift(1)
+    tr = pd.concat([(high - low), (high - prev_close).abs(), (low - prev_close).abs()], axis=1).max(axis=1)
+    atr_ = tr.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+    plus_di = 100 * plus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_
+    minus_di = 100 * minus_dm.ewm(alpha=1 / period, adjust=False).mean() / atr_
+    dx = 100 * (plus_di - minus_di).abs() / (plus_di + minus_di).replace(0, pd.NA)
+    return dx.ewm(alpha=1 / period, min_periods=period, adjust=False).mean()
+
+
 def compute_indicators(df: pd.DataFrame) -> dict:
     """Renvoie un dictionnaire d'indicateurs sur la dernière bougie + séries utiles."""
     close = df["close"]
