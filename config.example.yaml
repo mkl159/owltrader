@@ -68,6 +68,7 @@ paper:
   regime_filter: true    # n'acheter que si le marché (S&P 500) est au-dessus de sa MM200 (anti-bear)
   regime_symbol: "INDEX:^GSPC"
   vol_target: 0.20       # dimensionnement par volatilité (façon Dalio/Turtles ; robuste 5 & 10 ans)
+  rank_lookback: 21      # achats classés par momentum 1 mois (force relative ; +Sharpe, -drawdown)
 
 # Moteur de signaux
 signaux:

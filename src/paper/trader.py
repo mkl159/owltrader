@@ -38,10 +38,12 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     alloc = params.get("alloc_pct", paper_cfg.get("alloc_pct", 20))
 
     vt = paper_cfg.get("vol_target", 0) or 0
+    rlb = int(paper_cfg.get("rank_lookback", 0) or 0)
     hist = svc.fetch_histories(universe, period="1y")
     wants: dict[str, bool] = {}
     prices: dict[str, float] = {}
     vols: dict[str, float] = {}
+    moms: dict[str, float] = {}
     for a, df in hist.items():
         try:
             last_close = float(df["close"].iloc[-1])
@@ -53,6 +55,10 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
                 v = float(df["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
                 if v == v and v > 0:
                     vols[a] = v
+            if rlb > 0 and len(df) > rlb:
+                m = float(df["close"].iloc[-1] / df["close"].iloc[-1 - rlb] - 1)
+                if m == m:
+                    moms[a] = m
         except Exception:  # noqa: BLE001
             continue
 
@@ -98,6 +104,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
     cands = [a for a in universe if wants.get(a) and a not in held and a in prices]
+    if rlb > 0:  # classe par momentum relatif : les plus forts d'abord
+        cands.sort(key=lambda a: moms.get(a, -9e9), reverse=True)
     for a in cands[: max(0, free)]:
         base = equity_now * alloc / 100.0
         if vt > 0 and a in vols:

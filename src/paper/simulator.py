@@ -63,6 +63,7 @@ def simulate(
     vix_df=None,
     vix_max: float = 0.0,
     vol_target: float = 0.0,
+    rank_lookback: int = 0,
 ) -> SimResult | None:
     """Simule la gestion autonome sur l'historique fourni. histories: {actif: df OHLCV}."""
     histories = {k: v for k, v in histories.items() if v is not None and "close" in v and len(v) > long + 5}
@@ -82,6 +83,10 @@ def simulate(
     vol_df = None
     if vol_target and vol_target > 0:
         vol_df = closes_df.pct_change().rolling(20).std() * (252 ** 0.5)
+    # Momentum relatif pour classer les candidats (force-relative / dual momentum)
+    mom_df = None
+    if rank_lookback and rank_lookback > 0:
+        mom_df = closes_df / closes_df.shift(rank_lookback) - 1
     # ffill (et non fillna 0) : un jour sans cotation conserve l'état précédent
     # — sinon les actions seraient "vendues" chaque week-end puis rachetées (churn + frais).
     desired_df = pd.DataFrame(desired).reindex(closes_df.index).ffill().fillna(0).astype(int)
@@ -147,6 +152,10 @@ def simulate(
             equity_now = cash + sum(holdings[a] * closes_df.at[t, a] for a in holdings)
             cands = [a for a in desired_df.columns
                      if desired_df.at[t, a] == 1 and a not in holdings and not pd.isna(closes_df.at[t, a])]
+            # Classement par momentum relatif : on prend les plus forts d'abord
+            if mom_df is not None:
+                cands.sort(key=lambda a: (mom_df.at[t, a] if pd.notna(mom_df.at[t, a]) else -9e9),
+                           reverse=True)
             for a in cands[:free]:
                 base = equity_now * alloc_pct / 100.0
                 if vol_df is not None:

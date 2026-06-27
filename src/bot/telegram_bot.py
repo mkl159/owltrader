@@ -546,7 +546,7 @@ async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
         stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
-        vol_target=cfg.get("vol_target", 0),
+        vol_target=cfg.get("vol_target", 0), rank_lookback=cfg.get("rank_lookback", 0),
     )
     await msg.edit_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD)
     if r is not None:
@@ -580,7 +580,7 @@ async def _autotune_universe(context):
         fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
         max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
         stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
-        vol_target=cfg.get("vol_target", 0),
+        vol_target=cfg.get("vol_target", 0), rank_lookback=cfg.get("rank_lookback", 0),
     )
 
 
@@ -875,7 +875,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             fee_pct=cfg.get("frais_pct", 0.2), fee_min=cfg.get("frais_min", 1.0),
             max_positions=cfg.get("max_positions", 5), alloc_pct=cfg.get("alloc_pct", 20),
             stop_loss_pct=cfg.get("stop_loss_pct", 0), max_dd_pause=cfg.get("max_dd_pause", 0),
-            vol_target=cfg.get("vol_target", 0))
+            vol_target=cfg.get("vol_target", 0), rank_lookback=cfg.get("rank_lookback", 0))
         await q.edit_message_text(sim_block(r, cfg.get("devise", "EUR")), parse_mode=MD,
                                   reply_markup=back_button("auto_menu"))
         if r is not None:
