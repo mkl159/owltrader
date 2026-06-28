@@ -1138,21 +1138,6 @@ def build_application() -> Application:
             "(obtenu auprès de @BotFather). Pour tester sans Telegram : python -m src.cli analyse AAPL"
         )
     app = Application.builder().token(token).build()
-
-    # Filet de sécurité : si un message au format Markdown échoue, on le renvoie en texte simple.
-    from telegram.error import BadRequest
-    _orig_send = app.bot.send_message
-
-    async def _safe_send(*args, **kwargs):
-        try:
-            return await _orig_send(*args, **kwargs)
-        except BadRequest as e:
-            if kwargs.get("parse_mode") and "parse" in str(e).lower():
-                kwargs.pop("parse_mode", None)
-                return await _orig_send(*args, **kwargs)
-            raise
-    app.bot.send_message = _safe_send
-
     app.bot_data["svc"] = MarketService()
     db = Storage()
     db.seed_universe(CONFIG.get("univers_scan", []))
