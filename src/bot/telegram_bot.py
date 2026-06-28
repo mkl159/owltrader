@@ -111,6 +111,7 @@ HELP = (
     "• /ajouter `AAPL 10 180` — qté, prix d'achat\n"
     "• /portefeuille · /perf\n\n"
     "🔌 *Connecteurs & sauvegarde*\n"
+    "• /config — régler les clés API (chiffrées) · /set · /del\n"
     "• /broker — connexion à un échange (Binance, Kraken… via ccxt)\n"
     "• /export — exporter la config · /sauvegarde — sauvegarder la base\n\n"
     "⚙️ *Réglages* : /reglages · /digest · /menu · /langue\n\n"
@@ -136,6 +137,7 @@ HELP_EN = (
     "👁️ *Watchlist* : /watch · /unwatch · /liste\n"
     "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
     "🔌 *Connectors & backup*\n"
+    "• /config — set API keys (encrypted) · /set · /del\n"
     "• /broker — connect to an exchange (Binance, Kraken… via ccxt)\n"
     "• /export — export config · /sauvegarde — back up the database\n\n"
     "⚙️ *Settings* : /reglages · /digest · /menu · /langue\n\n"
@@ -253,8 +255,26 @@ def settings_keyboard(s: dict, lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup
 # --------------------------------------------------------------------------- #
 #  Commandes
 # --------------------------------------------------------------------------- #
+MAX_ATTEMPTS = 5
+LOCKOUT_SECONDS = 900  # 15 minutes
+
+
+async def _alert_admins(context, update, reason: str):
+    """Prévient tous les utilisateurs authentifiés d'un évènement de sécurité."""
+    db = context.application.bot_data["db"]
+    u = update.effective_user
+    who = f"{getattr(u, 'full_name', '')} (@{getattr(u, 'username', None) or '—'}, id {getattr(u, 'id', '?')})"
+    for admin_id in db.all_authorized():
+        try:
+            await context.bot.send_message(
+                admin_id, f"🚨 *Sécurité · Security*\n{reason}\n👤 {who}", parse_mode=MD)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Protection par mot de passe (1re connexion). S'exécute avant tout le reste."""
+    """Protection par mot de passe + anti-brute-force + alerte d'intrusion."""
+    import time
     pwd = get_secret("ACCESS_PASSWORD")
     if not pwd:
         return  # aucune protection configurée -> bot ouvert
@@ -264,18 +284,57 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     db = _db(context)
     if db.is_authorized(chat.id):
         return  # déjà autorisé -> laisse passer
-    # tentative de mot de passe via message texte
-    if update.message and (update.message.text or "").strip() == pwd:
-        db.authorize(chat.id)
-        await update.message.reply_text(
-            "✅ *Accès autorisé · Access granted.*\nTape /start pour commencer · Type /start to begin.",
-            parse_mode=MD)
+
+    attempts = context.application.bot_data.setdefault("auth_attempts", {})
+    rec = attempts.setdefault(chat.id, {"count": 0, "until": 0.0, "alerted": False})
+    now = time.time()
+
+    # Verrouillage actif
+    if rec["until"] > now:
+        if update.message:
+            mins = int((rec["until"] - now) / 60) + 1
+            await update.message.reply_text(
+                f"⛔ Trop de tentatives. Réessaie dans {mins} min · Too many attempts, retry in {mins} min.")
         raise ApplicationHandlerStop
-    # sinon : on demande le mot de passe et on bloque
+
+    text = (update.message.text or "").strip() if update.message else ""
+
+    # Confidentialité : on supprime tout de suite le message contenant le mot de passe tapé
+    if text and update.message:
+        try:
+            await update.message.delete()
+        except Exception:  # noqa: BLE001
+            pass
+
+    # Bon mot de passe
+    if text and text == pwd:
+        db.authorize(chat.id)
+        attempts.pop(chat.id, None)
+        await _alert_admins(context, update, "✅ Nouvel accès autorisé · New authorized access")
+        await context.bot.send_message(
+            chat.id, "✅ *Accès autorisé · Access granted.*\nTape /start · Type /start.", parse_mode=MD)
+        raise ApplicationHandlerStop
+
+    # Tentative échouée (texte non vide = vraie tentative)
+    if text:
+        rec["count"] += 1
+        if rec["count"] >= MAX_ATTEMPTS:
+            rec["until"] = now + LOCKOUT_SECONDS
+            await _alert_admins(context, update,
+                                f"🔒 {rec['count']} échecs de mot de passe → verrouillé 15 min · locked")
+            await context.bot.send_message(
+                chat.id, "⛔ Trop de tentatives. Verrouillé 15 min · Locked 15 min.")
+            raise ApplicationHandlerStop
+
+    # Première interaction d'un inconnu : on alerte les admins une fois
+    if not rec["alerted"]:
+        rec["alerted"] = True
+        await _alert_admins(context, update, "🔐 Tentative de connexion · Connection attempt")
+
     if update.message:
-        await update.message.reply_text(
-            "🔒 *Bot protégé · Protected bot*\n\n"
-            "Entre le mot de passe pour accéder · Enter the password to access:")
+        await context.bot.send_message(
+            chat.id, "🔒 *Bot protégé · Protected bot*\n\nEntre le mot de passe · Enter the password:",
+            parse_mode=MD)
     elif update.callback_query:
         await update.callback_query.answer(
             "🔒 Entre le mot de passe d'abord · Enter the password first", show_alert=True)
@@ -469,6 +528,71 @@ async def apercu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rc = await asyncio.to_thread(svc.risk_climate)
     season, _, _ = await asyncio.to_thread(svc.season)
     await msg.edit_text(briefing_block(brief, rc, season), parse_mode=MD)
+
+
+# Clés réglables depuis Telegram : nom -> (libellé, est_secret)
+CONFIG_KEYS = {
+    "ACCESS_PASSWORD": ("Mot de passe du bot · Bot password", True),
+    "ALPACA_API_KEY_ID": ("Alpaca key id", True),
+    "ALPACA_API_SECRET": ("Alpaca secret", True),
+    "EXCHANGE_NAME": ("Échange · Exchange (ex: binance)", False),
+    "EXCHANGE_API_KEY": ("Exchange API key", True),
+    "EXCHANGE_API_SECRET": ("Exchange API secret", True),
+    "ANTHROPIC_API_KEY": ("Anthropic key (IA actus)", True),
+}
+
+
+async def config_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Voir et régler la configuration (clés API…) directement depuis Telegram."""
+    db = _db(context)
+    cfg = db.all_config()
+    lines = ["🔧 *Configuration*  (réglable ici · set from here)", ""]
+    for key, (label, secret) in CONFIG_KEYS.items():
+        val = cfg.get(key)
+        if val:
+            shown = "•••• défini · set" if secret else f"`{val}`"
+        else:
+            shown = "_(vide · not set)_"
+        lines.append(f"• *{label}*\n  `{key}` → {shown}")
+    lines.append(
+        "\n📝 *Régler · Set* : `/set CLE valeur`\n"
+        "Ex : `/set EXCHANGE_NAME binance`\n"
+        "🗑️ *Effacer · Clear* : `/del CLE`\n\n"
+        "_🔒 Pour les secrets, ton message est supprimé automatiquement. "
+        "Secrets are auto-deleted from the chat._")
+    await update.message.reply_text("\n".join(lines), parse_mode=MD)
+
+
+async def set_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2:
+        return await update.message.reply_text("Usage : /set CLE valeur · /set KEY value")
+    key = context.args[0].upper()
+    value = " ".join(context.args[1:])
+    if key not in CONFIG_KEYS:
+        keys = ", ".join(CONFIG_KEYS)
+        return await update.message.reply_text(f"Clé inconnue · Unknown key.\nClés · keys : {keys}")
+    _db(context).set_config(key, value)
+    label, secret = CONFIG_KEYS[key]
+    if secret:
+        try:
+            await update.message.delete()  # retire le secret du chat
+        except Exception:  # noqa: BLE001
+            pass
+        await context.bot.send_message(update.effective_chat.id,
+                                       f"✅ *{label}* enregistré (et message supprimé) · saved.",
+                                       parse_mode=MD)
+    else:
+        await update.message.reply_text(f"✅ *{label}* = `{value}`", parse_mode=MD)
+
+
+async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Usage : /del CLE · /del KEY")
+    key = context.args[0].upper()
+    if key not in CONFIG_KEYS:
+        return await update.message.reply_text("Clé inconnue · Unknown key.")
+    _db(context).del_config(key)
+    await update.message.reply_text(f"🗑️ `{key}` effacé · cleared.", parse_mode=MD)
 
 
 async def broker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1371,6 +1495,9 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["config", "configuration"], config_cmd))
+    app.add_handler(CommandHandler("set", set_cmd))
+    app.add_handler(CommandHandler(["del", "supprimer"], del_cmd))
     app.add_handler(CommandHandler(["broker", "exchange", "echange"], broker_cmd))
     app.add_handler(CommandHandler(["export", "config"], export_cmd))
     app.add_handler(CommandHandler(["sauvegarde", "backup"], sauvegarde_cmd))

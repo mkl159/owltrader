@@ -78,7 +78,26 @@ def load_config() -> dict:
     return dict(DEFAULTS)
 
 
+_kv_store = None
+
+
+def _kv():
+    """Magasin de config (SQLite) mis en cache — pour les clés réglées via Telegram."""
+    global _kv_store
+    if _kv_store is None:
+        from .storage import Storage
+        _kv_store = Storage()
+    return _kv_store
+
+
 def get_secret(name: str) -> str | None:
+    """Valeur d'un secret/clé : d'abord la config réglée par Telegram, sinon le .env."""
+    try:
+        v = _kv().get_config(name)
+        if v:
+            return v
+    except Exception:  # noqa: BLE001
+        pass
     return os.environ.get(name)
 
 

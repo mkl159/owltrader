@@ -22,6 +22,9 @@ APScheduler
 PyYAML
 python-dotenv
 
+# --- Sécurité (chiffrement des secrets en base) ---
+cryptography
+
 # --- Visualisation ---
 matplotlib
 plotly

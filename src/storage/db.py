@@ -82,6 +82,9 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS authorized (
                     chat_id INTEGER PRIMARY KEY, ts TEXT
                 );
+                CREATE TABLE IF NOT EXISTS kv_config (
+                    key TEXT PRIMARY KEY, value TEXT
+                );
                 CREATE TABLE IF NOT EXISTS price_alerts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER, asset TEXT, target REAL,
@@ -229,6 +232,28 @@ class Storage:
             return dict(row)
         return {"chat_id": chat_id, "sensibilite": "normale", "digest": 1, "langue": "fr"}
 
+    # --- Config clé-valeur CHIFFRÉE (modifiable depuis Telegram : clés API, etc.) ---
+    def get_config(self, key: str) -> Optional[str]:
+        from ..crypto import decrypt
+        with self._conn() as c:
+            row = c.execute("SELECT value FROM kv_config WHERE key=?", (key,)).fetchone()
+        return decrypt(row["value"]) if row else None
+
+    def set_config(self, key: str, value: str):
+        from ..crypto import encrypt
+        with self._conn() as c:
+            c.execute("INSERT OR REPLACE INTO kv_config VALUES (?,?)", (key, encrypt(value)))
+
+    def del_config(self, key: str):
+        with self._conn() as c:
+            c.execute("DELETE FROM kv_config WHERE key=?", (key,))
+
+    def all_config(self) -> dict:
+        from ..crypto import decrypt
+        with self._conn() as c:
+            return {r["key"]: decrypt(r["value"])
+                    for r in c.execute("SELECT key, value FROM kv_config").fetchall()}
+
     # --- Contrôle d'accès (mot de passe) ---
     def is_authorized(self, chat_id: int) -> bool:
         with self._conn() as c:
@@ -242,6 +267,10 @@ class Storage:
     def deauthorize(self, chat_id: int):
         with self._conn() as c:
             c.execute("DELETE FROM authorized WHERE chat_id=?", (chat_id,))
+
+    def all_authorized(self) -> list[int]:
+        with self._conn() as c:
+            return [r["chat_id"] for r in c.execute("SELECT chat_id FROM authorized").fetchall()]
 
     def has_settings(self, chat_id: int) -> bool:
         with self._conn() as c:
