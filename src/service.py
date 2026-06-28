@@ -161,13 +161,31 @@ class MarketService:
         return seasonal_context(), upcoming_holidays(days=150), days_to_next_holiday()
 
     def risk_climate(self):
-        """Climat de risque macro/géopolitique : VIX + scan d'actus."""
-        from .news import get_news
+        """Climat de risque macro/géopolitique : VIX + scan d'actus multi-sources."""
+        from .news import get_market_news
         from .risk_climate import assess
         q = self.quote("INDEX:^VIX")
         vix = q.price if q else None
-        titles = [it.title for it in get_news("INDEX:^GSPC", 12)]
+        titles = [it.title for it in get_market_news(15)]
         return assess(vix, titles)
+
+    def briefing(self, universe: list[str]) -> dict:
+        """Briefing complet en un seul balayage de l'univers (efficace)."""
+        from .models import Direction
+        from .regime import market_ok_now
+        from .signals import analyze as _analyze
+        from .trend import aggregate_market, aggregate_trend
+        hist = self.fetch_histories(universe, period="1y")
+        market = aggregate_market([aggregate_trend(a, df) for a, df in hist.items()])
+        sigs = [s for s in (_analyze(a, df) for a, df in hist.items()) if s]
+        buys = sorted([s for s in sigs if s.direction == Direction.BUY],
+                      key=lambda s: s.score, reverse=True)
+        if not buys:
+            buys = sorted(sigs, key=lambda s: s.score, reverse=True)
+        pc = self._paper_conf()
+        mkt = hist.get(pc.get("regime_symbol", "INDEX:^GSPC"))
+        regime_ok = market_ok_now(mkt) if mkt is not None else True
+        return {"market": market, "ideas": buys[:3], "regime_ok": regime_ok}
 
     def team_votes(self, raw: str) -> dict | None:
         """Vote de chaque stratégie de l'équipe pour un actif (transparence des décisions)."""

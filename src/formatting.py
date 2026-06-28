@@ -172,6 +172,37 @@ def season_block(s, upcoming: list, next_hol) -> str:
     return "\n".join(lines)
 
 
+def briefing_block(brief: dict, rc, season) -> str:
+    """Le briefing « ultime » : tout le contexte de marché en un coup d'œil."""
+    m = brief.get("market")
+    regime_ok = brief.get("regime_ok", True)
+    ideas = brief.get("ideas", [])
+    lines = ["📊 *BRIEFING MARCHÉ — vue d'ensemble*", ""]
+
+    # Régime + tendance
+    if m:
+        lines.append(f"{m.emoji} *Marché : {m.label}*  ({m.breadth:.0f}% haussiers)")
+    lines.append("🟢 Régime favorable (le bot peut acheter)" if regime_ok
+                 else "🔴 Régime défavorable (le bot reste prudent)")
+    # Risque
+    if rc:
+        lines.append(f"🌐 Risque : {rc.label} · {rc.vix_note}")
+    # Saison
+    if season:
+        arrow = "🟢" if season.bias > 0.15 else "🔴" if season.bias < -0.15 else "⚪"
+        note = season.notes[0] if season.notes else ""
+        lines.append(f"📅 Saison : {arrow} {note}")
+    # Top idées
+    lines.append("\n💡 *Top opportunités*")
+    if ideas:
+        for s in ideas:
+            lines.append(f"{s.emoji} {s.symbol} — {s.direction.value} (force {s.score:.0f})")
+    else:
+        lines.append("Aucune opportunité claire pour le moment.")
+    lines.append("\n_Synthèse de toutes les analyses. ⚠️ Éducatif, pas un conseil._")
+    return "\n".join(lines)
+
+
 def masters_block() -> str:
     """Crédite les traders célèbres dont OwlTrader applique les principes (validés)."""
     return (

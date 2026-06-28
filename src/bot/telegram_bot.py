@@ -124,6 +124,7 @@ def _db(context) -> Storage:
 def main_menu() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         [
+            [InlineKeyboardButton("📊 Briefing marché", callback_data="apercu")],
             [InlineKeyboardButton("🤖 Mode autonome", callback_data="auto_menu"),
              InlineKeyboardButton("🧪 Simuler", callback_data="simuler")],
             [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees"),
@@ -362,6 +363,17 @@ async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def maitres(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from ..formatting import masters_block
     await update.message.reply_text(masters_block(), parse_mode=MD)
+
+
+async def apercu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Briefing complet du marché en un coup d'œil."""
+    from ..formatting import briefing_block
+    msg = await update.message.reply_text("📊 Je prépare ton briefing complet…")
+    svc = _svc(context)
+    brief = await asyncio.to_thread(svc.briefing, _universe())
+    rc = await asyncio.to_thread(svc.risk_climate)
+    season, _, _ = await asyncio.to_thread(svc.season)
+    await msg.edit_text(briefing_block(brief, rc, season), parse_mode=MD)
 
 
 async def sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -819,6 +831,15 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("🚀 Recherche des plus forts mouvements…")
         m = await asyncio.to_thread(_svc(context).movers, _universe())
         return await q.edit_message_text(movers_block(m), parse_mode=MD, reply_markup=back_button())
+    if data == "apercu":
+        from ..formatting import briefing_block
+        await q.edit_message_text("📊 Je prépare ton briefing complet…")
+        svc = _svc(context)
+        brief = await asyncio.to_thread(svc.briefing, _universe())
+        rc = await asyncio.to_thread(svc.risk_climate)
+        season, _, _ = await asyncio.to_thread(svc.season)
+        return await q.edit_message_text(briefing_block(brief, rc, season), parse_mode=MD,
+                                         reply_markup=back_button())
     if data == "marche":
         await q.edit_message_text("🌍 Analyse de la tendance générale du marché…")
         m = await asyncio.to_thread(_svc(context).market_trend, _universe())
@@ -1159,6 +1180,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
     app.add_handler(CommandHandler(["maitres", "legendes", "masters"], maitres))
+    app.add_handler(CommandHandler(["apercu", "brief", "briefing", "dashboard"], apercu))
     app.add_handler(CommandHandler(["sources", "source"], sources))
     app.add_handler(CommandHandler(["saison", "season"], saison))
     app.add_handler(CommandHandler(["risque", "risk", "geopolitique"], risque))

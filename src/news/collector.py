@@ -20,6 +20,14 @@ GENERIC_FEEDS = {
     "CRYPTO": "https://www.coindesk.com/arc/outboundfeeds/rss/",
     "MARKET": "https://www.cnbc.com/id/100003114/device/rss/rss.html",  # marchés généraux
 }
+# Flux macro/marché agrégés (plusieurs sources gratuites pour une vue large)
+MARKET_FEEDS = [
+    ("CNBC", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
+    ("MarketWatch", "http://feeds.marketwatch.com/marketwatch/topstories/"),
+    ("Investing.com", "https://www.investing.com/rss/news.rss"),
+    ("Yahoo Finance", "https://finance.yahoo.com/news/rssindex"),
+    ("CoinDesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
+]
 
 
 @dataclass
@@ -77,6 +85,27 @@ def get_news(raw_asset: str, limit: int = 5) -> list[NewsItem]:
         except Exception as ex:  # noqa: BLE001
             log.warning("RSS %s a échoué : %s", url, ex)
 
+    items.sort(key=lambda i: i.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return items[:limit]
+
+
+def get_market_news(limit: int = 12) -> list[NewsItem]:
+    """Agrège les actus macro/marché depuis PLUSIEURS sources (vue large)."""
+    items: list[NewsItem] = []
+    seen = set()
+    for source, url in MARKET_FEEDS:
+        try:
+            feed = feedparser.parse(url)
+            for e in feed.entries[:limit]:
+                title = getattr(e, "title", "").strip()
+                if not title or title.lower() in seen:
+                    continue
+                seen.add(title.lower())
+                items.append(NewsItem(title=title, link=getattr(e, "link", ""),
+                                      published=_parse_date(e), source=source,
+                                      sentiment=score_sentiment(title)))
+        except Exception as ex:  # noqa: BLE001
+            log.info("flux marché %s : %s", source, ex)
     items.sort(key=lambda i: i.published or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
     return items[:limit]
 
