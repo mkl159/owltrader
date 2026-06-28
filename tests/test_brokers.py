@@ -49,3 +49,10 @@ def test_alpaca_submit_order_payload():
     assert kwargs["json"]["symbol"] == "AAPL"
     assert kwargs["json"]["side"] == "buy"
     assert kwargs["json"]["type"] == "market"
+
+
+def test_to_ccxt_symbol():
+    from src.brokers import to_ccxt_symbol
+    assert to_ccxt_symbol("CRYPTO:BTC") == "BTC/USDT"
+    assert to_ccxt_symbol("CRYPTO:ETH", quote="USD") == "ETH/USD"
+    assert to_ccxt_symbol("STOCK:AAPL") is None

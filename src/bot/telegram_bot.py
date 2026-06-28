@@ -17,9 +17,13 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
+    MessageHandler,
+    TypeHandler,
+    filters,
 )
 
 from ..config import CONFIG, get_secret
@@ -42,6 +46,7 @@ from ..formatting import (
     trade_log,
     trend_block,
 )
+from ..i18n import DEFAULT_LANG, normalize_lang, t
 from ..models import Direction
 from ..news import get_news
 from ..paper import trader
@@ -105,8 +110,36 @@ HELP = (
     "💼 *Portefeuille*\n"
     "• /ajouter `AAPL 10 180` — qté, prix d'achat\n"
     "• /portefeuille · /perf\n\n"
-    "⚙️ *Réglages* : /reglages · /digest · /menu\n\n"
+    "🔌 *Connecteurs & sauvegarde*\n"
+    "• /broker — connexion à un échange (Binance, Kraken… via ccxt)\n"
+    "• /export — exporter la config · /sauvegarde — sauvegarder la base\n\n"
+    "⚙️ *Réglages* : /reglages · /digest · /menu · /langue\n\n"
     "_⚠️ Outil éducatif — aucune recommandation d'investissement._"
+)
+
+HELP_EN = (
+    "🦉 *OwlTrader — commands*\n\n"
+    "🤖 *Autonomous mode (fictional)*\n"
+    "• /auto `1000` — manages €1000 on its own (buy/sell, fees included)\n"
+    "• /bilan — status + chart · /simuler — backtest + pro metrics\n"
+    "• /agressivite — conservative / normal / aggressive\n"
+    "• /autotune — re-tune · /reset · /stopauto · /alpaca\n\n"
+    "📊 *Market & ideas*\n"
+    "• /apercu — full market briefing (all-in-one)\n"
+    "• /idees — best buy opportunities · /equipe `AAPL` — strategy team vote\n"
+    "• /maitres — the legendary traders behind the bot\n"
+    "• /tendance `AAPL` · /marche · /saison · /risque · /movers\n\n"
+    "📈 *Research an asset*\n"
+    "• /prix `AAPL` · /analyse `AAPL` · /graph `AAPL` · /backtest `AAPL` · /actu `AAPL`\n\n"
+    "🔔 *Alerts & universe*\n"
+    "• /alerte `AAPL 200` · /alertes · /univers · /sources\n\n"
+    "👁️ *Watchlist* : /watch · /unwatch · /liste\n"
+    "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
+    "🔌 *Connectors & backup*\n"
+    "• /broker — connect to an exchange (Binance, Kraken… via ccxt)\n"
+    "• /export — export config · /sauvegarde — back up the database\n\n"
+    "⚙️ *Settings* : /reglages · /digest · /menu · /langue\n\n"
+    "_⚠️ Educational tool — not investment advice._"
 )
 
 
@@ -118,24 +151,33 @@ def _db(context) -> Storage:
     return context.application.bot_data["db"]
 
 
+def _lang(context, chat_id: int) -> str:
+    """Langue choisie par l'utilisateur (fr par défaut)."""
+    try:
+        return _db(context).get_settings(chat_id).get("langue", DEFAULT_LANG)
+    except Exception:  # noqa: BLE001
+        return DEFAULT_LANG
+
+
 # --------------------------------------------------------------------------- #
 #  Claviers (menus à boutons)
 # --------------------------------------------------------------------------- #
-def main_menu() -> InlineKeyboardMarkup:
+def main_menu(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
+    b = lambda k: t(k, lang)  # noqa: E731
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton("📊 Briefing marché", callback_data="apercu")],
-            [InlineKeyboardButton("🤖 Mode autonome", callback_data="auto_menu"),
-             InlineKeyboardButton("🧪 Simuler", callback_data="simuler")],
-            [InlineKeyboardButton("💡 Idées d'achat", callback_data="idees"),
-             InlineKeyboardButton("🚀 Top mouvements", callback_data="movers")],
-            [InlineKeyboardButton("🌍 Tendance marché", callback_data="marche")],
-            [InlineKeyboardButton("👁️ Ma watchlist", callback_data="watchlist"),
-             InlineKeyboardButton("💼 Portefeuille", callback_data="pf")],
-            [InlineKeyboardButton("📈 Performance", callback_data="perf"),
-             InlineKeyboardButton("📰 Actus", callback_data="news_menu")],
-            [InlineKeyboardButton("⚙️ Réglages", callback_data="settings"),
-             InlineKeyboardButton("❓ Aide", callback_data="help")],
+            [InlineKeyboardButton(b("btn_briefing"), callback_data="apercu")],
+            [InlineKeyboardButton(b("btn_auto"), callback_data="auto_menu"),
+             InlineKeyboardButton(b("btn_simulate"), callback_data="simuler")],
+            [InlineKeyboardButton(b("btn_ideas"), callback_data="idees"),
+             InlineKeyboardButton(b("btn_movers"), callback_data="movers")],
+            [InlineKeyboardButton(b("btn_market"), callback_data="marche")],
+            [InlineKeyboardButton(b("btn_watchlist"), callback_data="watchlist"),
+             InlineKeyboardButton(b("btn_portfolio"), callback_data="pf")],
+            [InlineKeyboardButton(b("btn_perf"), callback_data="perf"),
+             InlineKeyboardButton(b("btn_news"), callback_data="news_menu")],
+            [InlineKeyboardButton(b("btn_settings"), callback_data="settings"),
+             InlineKeyboardButton(b("btn_help"), callback_data="help")],
         ]
     )
 
@@ -164,8 +206,8 @@ def ideas_keyboard(signals) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def back_button(target: str = "menu") -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Retour", callback_data=target)]])
+def back_button(target: str = "menu", lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([[InlineKeyboardButton(t("btn_back", lang), callback_data=target)]])
 
 
 def watchlist_keyboard(assets: list[str]) -> InlineKeyboardMarkup:
@@ -186,20 +228,24 @@ def asset_keyboard(raw: str) -> InlineKeyboardMarkup:
     )
 
 
-def settings_keyboard(s: dict) -> InlineKeyboardMarkup:
+def settings_keyboard(s: dict, lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
     sens = s.get("sensibilite", "normale")
     digest_on = s.get("digest", 1)
     def mark(v):
         return "✅ " if v == sens else ""
+    sens_labels = {"peu": {"fr": "Peu d'alertes", "en": "Few alerts"},
+                   "normale": {"fr": "Normale", "en": "Normal"},
+                   "beaucoup": {"fr": "Beaucoup", "en": "Many"}}
+    digest_lbl = (("🔔 " + t("settings_digest", lang) + " : " + t("on", lang)) if digest_on
+                  else ("🔕 " + t("settings_digest", lang) + " : " + t("off", lang)))
     return InlineKeyboardMarkup(
         [
-            [InlineKeyboardButton(f"{mark('peu')}Peu d'alertes", callback_data="set:sensibilite:peu")],
-            [InlineKeyboardButton(f"{mark('normale')}Normale", callback_data="set:sensibilite:normale")],
-            [InlineKeyboardButton(f"{mark('beaucoup')}Beaucoup", callback_data="set:sensibilite:beaucoup")],
-            [InlineKeyboardButton(
-                ("🔕 Digest quotidien : OFF" if not digest_on else "🔔 Digest quotidien : ON"),
-                callback_data="set:digest:toggle")],
-            [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
+            [InlineKeyboardButton(f"{mark('peu')}" + sens_labels['peu'][lang], callback_data="set:sensibilite:peu")],
+            [InlineKeyboardButton(f"{mark('normale')}" + sens_labels['normale'][lang], callback_data="set:sensibilite:normale")],
+            [InlineKeyboardButton(f"{mark('beaucoup')}" + sens_labels['beaucoup'][lang], callback_data="set:sensibilite:beaucoup")],
+            [InlineKeyboardButton(digest_lbl, callback_data="set:digest:toggle")],
+            [InlineKeyboardButton(t("btn_language", lang), callback_data="set:langue:toggle")],
+            [InlineKeyboardButton(t("btn_back", lang), callback_data="menu")],
         ]
     )
 
@@ -207,17 +253,66 @@ def settings_keyboard(s: dict) -> InlineKeyboardMarkup:
 # --------------------------------------------------------------------------- #
 #  Commandes
 # --------------------------------------------------------------------------- #
+async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Protection par mot de passe (1re connexion). S'exécute avant tout le reste."""
+    pwd = get_secret("ACCESS_PASSWORD")
+    if not pwd:
+        return  # aucune protection configurée -> bot ouvert
+    chat = update.effective_chat
+    if chat is None:
+        return
+    db = _db(context)
+    if db.is_authorized(chat.id):
+        return  # déjà autorisé -> laisse passer
+    # tentative de mot de passe via message texte
+    if update.message and (update.message.text or "").strip() == pwd:
+        db.authorize(chat.id)
+        await update.message.reply_text(
+            "✅ *Accès autorisé · Access granted.*\nTape /start pour commencer · Type /start to begin.",
+            parse_mode=MD)
+        raise ApplicationHandlerStop
+    # sinon : on demande le mot de passe et on bloque
+    if update.message:
+        await update.message.reply_text(
+            "🔒 *Bot protégé · Protected bot*\n\n"
+            "Entre le mot de passe pour accéder · Enter the password to access:")
+    elif update.callback_query:
+        await update.callback_query.answer(
+            "🔒 Entre le mot de passe d'abord · Enter the password first", show_alert=True)
+    raise ApplicationHandlerStop
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _db(context).get_settings(update.effective_chat.id)  # crée l'entrée si besoin
-    await update.message.reply_text(WELCOME, parse_mode=MD, reply_markup=main_menu())
+    chat_id = update.effective_chat.id
+    db = _db(context)
+    # première rencontre : on déduit la langue depuis l'app Telegram de l'utilisateur
+    if not db.has_settings(chat_id):
+        lang = normalize_lang(getattr(update.effective_user, "language_code", None))
+        db.set_setting(chat_id, "langue", lang)
+    lang = _lang(context, chat_id)
+    await update.message.reply_text(t("welcome", lang), parse_mode=MD, reply_markup=main_menu(lang))
 
 
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🦉 *Menu principal*", parse_mode=MD, reply_markup=main_menu())
+    lang = _lang(context, update.effective_chat.id)
+    await update.message.reply_text(t("menu_title", lang), parse_mode=MD, reply_markup=main_menu(lang))
+
+
+async def langue_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Choisir la langue / choose the language."""
+    chat_id = update.effective_chat.id
+    if context.args and context.args[0].lower()[:2] in ("fr", "en"):
+        newlang = context.args[0].lower()[:2]
+    else:
+        newlang = "en" if _lang(context, chat_id) == "fr" else "fr"
+    _db(context).set_setting(chat_id, "langue", newlang)
+    await update.message.reply_text(t("lang_changed", newlang), parse_mode=MD,
+                                    reply_markup=main_menu(newlang))
 
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(HELP, parse_mode=MD)
+    lang = _lang(context, update.effective_chat.id)
+    await update.message.reply_text(HELP_EN if lang == "en" else HELP, parse_mode=MD)
 
 
 async def prix(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -374,6 +469,76 @@ async def apercu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     rc = await asyncio.to_thread(svc.risk_climate)
     season, _, _ = await asyncio.to_thread(svc.season)
     await msg.edit_text(briefing_block(brief, rc, season), parse_mode=MD)
+
+
+async def broker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Vérifie la connexion à un échange crypto (Binance, Kraken… via ccxt)."""
+    msg = await update.message.reply_text("🔌 Connexion à l'échange · Connecting to exchange…")
+
+    def _fetch():
+        from ..brokers import CCXTBroker
+        b = CCXTBroker()
+        return b.get_account(), b.get_positions()
+
+    try:
+        acc, pos = await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001
+        from ..formatting import esc_md
+        return await msg.edit_text(
+            "❌ *Échange non connecté · Exchange not connected.*\n"
+            f"_{esc_md(str(e)[:200])}_\n\n"
+            "Configure dans `.env` · Set in `.env`:\n"
+            "`EXCHANGE_NAME=binance`\n`EXCHANGE_API_KEY=...`\n`EXCHANGE_API_SECRET=...`\n\n"
+            "_Astuce : utilise le testnet de l'échange pour t'entraîner sans risque._",
+            parse_mode=MD)
+    lines = [f"🔌 *{acc['status']}*", f"💵 Cash : {acc['cash']:.2f} {acc['currency']}"]
+    if pos:
+        lines.append("\n*Avoirs · Holdings*")
+        for p in pos:
+            lines.append(f"• {p['symbol']} : {p['qty']:g}")
+    else:
+        lines.append("Aucun avoir · No holdings.")
+    await msg.edit_text("\n".join(lines), parse_mode=MD)
+
+
+async def export_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Envoie le fichier de configuration (sauvegarde / partage)."""
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent.parent
+    path = root / "config.yaml"
+    if not path.exists():
+        path = root / "config.example.yaml"
+    with open(path, "rb") as f:
+        await context.bot.send_document(
+            update.effective_chat.id, document=f, filename="owltrader-config.yaml",
+            caption="📤 Ta configuration · Your configuration.\n"
+                    "Renvoie-moi ce fichier (modifié) pour l'importer · Send it back to import it.")
+
+
+async def on_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Import d'un fichier de configuration envoyé dans le chat."""
+    doc = update.message.document
+    if not doc or not doc.file_name.lower().endswith((".yaml", ".yml")):
+        return
+    from pathlib import Path
+    root = Path(__file__).resolve().parent.parent.parent
+    try:
+        f = await doc.get_file()
+        await f.download_to_drive(str(root / "config.yaml"))
+        await update.message.reply_text(
+            "✅ *Configuration importée · Configuration imported.*\n"
+            "Elle sera appliquée au prochain redémarrage · Applied on next restart.",
+            parse_mode=MD)
+    except Exception as e:  # noqa: BLE001
+        await update.message.reply_text(f"❌ Import échoué · Import failed: {str(e)[:120]}")
+
+
+async def sauvegarde_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Déclenche une sauvegarde locale de la base et confirme."""
+    dest = await asyncio.to_thread(_db(context).backup)
+    await update.message.reply_text(
+        f"💾 *Sauvegarde effectuée · Backup done*\n`{dest}`\n"
+        "_(rotation : 7 dernières · keeps last 7)_", parse_mode=MD)
 
 
 async def sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -717,9 +882,11 @@ async def perf(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def reglages(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    s = _db(context).get_settings(update.effective_chat.id)
-    await update.message.reply_text(_settings_text(s), parse_mode=MD,
-                                    reply_markup=settings_keyboard(s))
+    chat_id = update.effective_chat.id
+    s = _db(context).get_settings(chat_id)
+    lang = _lang(context, chat_id)
+    await update.message.reply_text(_settings_text(s, lang), parse_mode=MD,
+                                    reply_markup=settings_keyboard(s, lang))
 
 
 async def digest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -729,11 +896,22 @@ async def digest_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------------------------------------------------------------- #
 #  Helpers d'affichage réutilisables (commandes + boutons)
 # --------------------------------------------------------------------------- #
-def _settings_text(s: dict) -> str:
+def _settings_text(s: dict, lang: str = DEFAULT_LANG) -> str:
+    on_off = t("on", lang) if s.get("digest", 1) else t("off", lang)
+    langue_aff = "Français" if s.get("langue", "fr") == "fr" else "English"
+    if lang == "en":
+        return (
+            "⚙️ *Settings*\n\n"
+            f"Alert sensitivity: *{s.get('sensibilite', 'normale')}*\n"
+            f"Daily digest: *{on_off}*\n"
+            f"Language: *{langue_aff}*\n\n"
+            "_Few = only strong signals. Many = more frequent alerts._"
+        )
     return (
         "⚙️ *Réglages*\n\n"
         f"Sensibilité des alertes : *{s.get('sensibilite', 'normale')}*\n"
-        f"Résumé quotidien : *{'activé' if s.get('digest', 1) else 'désactivé'}*\n\n"
+        f"Résumé quotidien : *{on_off}*\n"
+        f"Langue : *{langue_aff}*\n\n"
         "_Peu = seulement les signaux forts. Beaucoup = alertes plus fréquentes._"
     )
 
@@ -806,10 +984,12 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await q.answer()
 
+    lang = _lang(context, chat_id)
     if data == "menu":
-        return await q.edit_message_text("🦉 *Menu principal*", parse_mode=MD, reply_markup=main_menu())
+        return await q.edit_message_text(t("menu_title", lang), parse_mode=MD, reply_markup=main_menu(lang))
     if data == "help":
-        return await q.edit_message_text(HELP, parse_mode=MD, reply_markup=back_button())
+        return await q.edit_message_text(HELP_EN if lang == "en" else HELP, parse_mode=MD,
+                                         reply_markup=back_button(lang=lang))
     if data == "watchlist":
         items = db.get_watch(chat_id)
         if not items:
@@ -940,7 +1120,8 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=asset_keyboard(raw))
     if data == "settings":
         s = db.get_settings(chat_id)
-        return await q.edit_message_text(_settings_text(s), parse_mode=MD, reply_markup=settings_keyboard(s))
+        return await q.edit_message_text(_settings_text(s, lang), parse_mode=MD,
+                                         reply_markup=settings_keyboard(s, lang))
     if data == "news_menu":
         items = db.get_watch(chat_id)
         if not items:
@@ -976,12 +1157,20 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         val = data.split(":")[2]
         db.set_setting(chat_id, "sensibilite", val)
         s = db.get_settings(chat_id)
-        return await q.edit_message_text(_settings_text(s), parse_mode=MD, reply_markup=settings_keyboard(s))
+        return await q.edit_message_text(_settings_text(s, lang), parse_mode=MD,
+                                         reply_markup=settings_keyboard(s, lang))
     if data == "set:digest:toggle":
         s = db.get_settings(chat_id)
         db.set_setting(chat_id, "digest", 0 if s.get("digest", 1) else 1)
         s = db.get_settings(chat_id)
-        return await q.edit_message_text(_settings_text(s), parse_mode=MD, reply_markup=settings_keyboard(s))
+        return await q.edit_message_text(_settings_text(s, lang), parse_mode=MD,
+                                         reply_markup=settings_keyboard(s, lang))
+    if data == "set:langue:toggle":
+        newlang = "en" if lang == "fr" else "fr"
+        db.set_setting(chat_id, "langue", newlang)
+        s = db.get_settings(chat_id)
+        return await q.edit_message_text(_settings_text(s, newlang), parse_mode=MD,
+                                         reply_markup=settings_keyboard(s, newlang))
 
 
 # --------------------------------------------------------------------------- #
@@ -1166,6 +1355,9 @@ def build_application() -> Application:
     global _DB_REF
     _DB_REF = db
 
+    # Porte d'authentification (priorité haute, avant tout le reste)
+    app.add_handler(TypeHandler(Update, auth_gate), group=-1)
+
     app.add_handler(CommandHandler(["start"], start))
     app.add_handler(CommandHandler(["aide", "help"], help_cmd))
     app.add_handler(CommandHandler("menu", menu_cmd))
@@ -1179,6 +1371,10 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["broker", "exchange", "echange"], broker_cmd))
+    app.add_handler(CommandHandler(["export", "config"], export_cmd))
+    app.add_handler(CommandHandler(["sauvegarde", "backup"], sauvegarde_cmd))
+    app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(CommandHandler(["maitres", "legendes", "masters"], maitres))
     app.add_handler(CommandHandler(["apercu", "brief", "briefing", "dashboard"], apercu))
     app.add_handler(CommandHandler(["sources", "source"], sources))
@@ -1196,6 +1392,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("portefeuille", portefeuille))
     app.add_handler(CommandHandler("perf", perf))
     app.add_handler(CommandHandler("reglages", reglages))
+    app.add_handler(CommandHandler(["langue", "language", "lang"], langue_cmd))
     app.add_handler(CommandHandler("digest", digest_cmd))
     app.add_handler(CommandHandler(["auto", "autonome"], auto))
     app.add_handler(CommandHandler(["reset", "reinit"], reset_auto))

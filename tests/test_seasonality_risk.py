@@ -43,3 +43,13 @@ def test_assess_climat():
     rc = assess(35, ["missile strike reported", "tariffs raised"])
     assert rc.bias < 0                   # VIX haut + tension -> risk-off
     assert -1.0 <= rc.bias <= 1.0
+
+
+def test_i18n():
+    from src.i18n import normalize_lang, t
+    assert t("welcome", "en").startswith("🦉 *Welcome")
+    assert t("welcome", "fr").startswith("🦉 *Bienvenue")
+    assert t("btn_back", "en") == "⬅️ Back"
+    assert t("unknown_key", "en") == "unknown_key"   # repli sur la clé
+    assert normalize_lang("en-GB") == "en"
+    assert normalize_lang("xx") == "fr"              # repli défaut

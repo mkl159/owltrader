@@ -54,7 +54,8 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS settings (
                     chat_id INTEGER PRIMARY KEY,
                     sensibilite TEXT DEFAULT 'normale',
-                    digest INTEGER DEFAULT 1
+                    digest INTEGER DEFAULT 1,
+                    langue TEXT DEFAULT 'fr'
                 );
                 CREATE TABLE IF NOT EXISTS paper_account (
                     chat_id INTEGER PRIMARY KEY,
@@ -78,6 +79,9 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS scan_universe (
                     asset TEXT PRIMARY KEY
                 );
+                CREATE TABLE IF NOT EXISTS authorized (
+                    chat_id INTEGER PRIMARY KEY, ts TEXT
+                );
                 CREATE TABLE IF NOT EXISTS price_alerts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER, asset TEXT, target REAL,
@@ -85,6 +89,10 @@ class Storage:
                 );
                 """
             )
+            # Migration : ajoute la colonne langue aux bases existantes
+            cols = [r[1] for r in c.execute("PRAGMA table_info(settings)").fetchall()]
+            if "langue" not in cols:
+                c.execute("ALTER TABLE settings ADD COLUMN langue TEXT DEFAULT 'fr'")
 
     # --- Univers de scan/trading (modifiable, sinon défaut config) ---
     def get_universe(self) -> list[str]:
@@ -219,10 +227,28 @@ class Storage:
             row = c.execute("SELECT * FROM settings WHERE chat_id=?", (chat_id,)).fetchone()
         if row:
             return dict(row)
-        return {"chat_id": chat_id, "sensibilite": "normale", "digest": 1}
+        return {"chat_id": chat_id, "sensibilite": "normale", "digest": 1, "langue": "fr"}
+
+    # --- Contrôle d'accès (mot de passe) ---
+    def is_authorized(self, chat_id: int) -> bool:
+        with self._conn() as c:
+            return c.execute("SELECT 1 FROM authorized WHERE chat_id=?", (chat_id,)).fetchone() is not None
+
+    def authorize(self, chat_id: int):
+        with self._conn() as c:
+            c.execute("INSERT OR IGNORE INTO authorized VALUES (?,?)",
+                      (chat_id, datetime.now(timezone.utc).isoformat()))
+
+    def deauthorize(self, chat_id: int):
+        with self._conn() as c:
+            c.execute("DELETE FROM authorized WHERE chat_id=?", (chat_id,))
+
+    def has_settings(self, chat_id: int) -> bool:
+        with self._conn() as c:
+            return c.execute("SELECT 1 FROM settings WHERE chat_id=?", (chat_id,)).fetchone() is not None
 
     def set_setting(self, chat_id: int, key: str, value):
-        if key not in ("sensibilite", "digest"):
+        if key not in ("sensibilite", "digest", "langue"):
             raise ValueError(key)
         with self._conn() as c:
             c.execute(

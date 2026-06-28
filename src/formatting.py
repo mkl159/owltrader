@@ -228,7 +228,8 @@ def team_block(symbol: str, votes: dict) -> str:
     if not votes:
         return "👥 Équipe indisponible (données insuffisantes)."
     noms = {"tendance": "📈 Suiveur de tendance", "momentum": "🚀 Momentum",
-            "retour_moyenne": "🔄 Retour à la moyenne", "turtle": "🐢 Turtle (Dennis)"}
+            "retour_moyenne": "🔄 Retour à la moyenne", "turtle": "🐢 Turtle (Dennis)",
+            "minervini": "🏆 Minervini (SEPA)"}
     pour = sum(1 for v in votes.values() if v)
     n = len(noms)
     lines = [f"👥 *L'équipe sur {symbol}*", ""]

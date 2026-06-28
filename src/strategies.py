@@ -77,6 +77,23 @@ def breakout_position(df: pd.DataFrame, entry_window: int = 20, exit_window: int
     return _state_machine(enter, exit_)
 
 
+def minervini_position(df: pd.DataFrame) -> pd.Series:
+    """« Trend Template » de Mark Minervini (méthode SEPA, champion US d'investissement).
+
+    On détient quand : cours > MM50 > MM150 > MM200, MM200 orientée à la hausse,
+    cours dans le tiers haut de son range 52 semaines. Sortie sous la MM50.
+    """
+    close = df["close"].astype(float)
+    s50, s150, s200 = sma(close, 50), sma(close, 150), sma(close, 200)
+    hi = close.rolling(252, min_periods=50).max()
+    lo = close.rolling(252, min_periods=50).min()
+    s200_up = s200 > s200.shift(22)
+    enter = ((close > s50) & (s50 > s150) & (s150 > s200) & s200_up
+             & (close >= 0.75 * hi) & (close >= 1.25 * lo))
+    exit_ = close < s50
+    return _state_machine(enter.fillna(False), exit_.fillna(False))
+
+
 def ensemble_position_series(df: pd.DataFrame, short: int = 20, long: int = 50,
                              rsi_entry_max: float = 70, rsi_exit: float = 80,
                              w_trend: float = 0.5, w_mom: float = 0.3, w_mr: float = 0.2,
@@ -98,7 +115,8 @@ def votes_now(df: pd.DataFrame, **params) -> dict:
     for name, fn in (("tendance", lambda d: trend_position(d, **sp)),
                      ("momentum", momentum_position),
                      ("retour_moyenne", meanrev_position),
-                     ("turtle", breakout_position)):
+                     ("turtle", breakout_position),
+                     ("minervini", minervini_position)):
         try:
             s = fn(df)
             out[name] = bool(s.iloc[-1]) if len(s) else False

@@ -38,7 +38,16 @@ A real 5-year simulation of the autonomous mode: **€1000 → €2211 (+121%)**
 - 📊 **One-tap market briefing** (`/apercu`) — trend, regime, geopolitical risk, seasonality and top picks, all in one view.
 - 📰 **News + sentiment** — aggregates free RSS feeds and scores them.
 - 🔔 **Price alerts** and **sell alerts** on your holdings.
+- 🌍 **Bilingual** — English & French, switch anytime with `/langue`.
+- 🔒 **Password-protected** access (first connection) — configurable.
+- 🔌 **Broker connectors** — Alpaca (paper) + 100+ crypto exchanges via CCXT (Binance, Kraken…).
+- 💾 **Config export/import** and local backups, all from Telegram.
 - 🛡️ Runs **24/7** (systemd), with daily backups.
+
+## 📖 Documentation
+
+- 🛠️ [Installation & configuration tutorial](docs/INSTALL.md)
+- 🤖 [Full command reference (EN/FR)](docs/COMMANDS.md)
 
 ---
 

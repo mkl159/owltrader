@@ -73,3 +73,16 @@ def test_coingecko_supports():
     assert cg.supports(Asset.parse("CRYPTO:BTC")) is True
     assert cg.supports(Asset.parse("STOCK:AAPL")) is False
     assert cg.supports(Asset.parse("CRYPTO:UNKNOWNXYZ")) is False
+
+
+def test_storage_authorization():
+    import tempfile
+    from pathlib import Path
+    from src.storage import Storage
+    with tempfile.TemporaryDirectory() as d:
+        db = Storage(Path(d) / "t.db")
+        assert db.is_authorized(9) is False
+        db.authorize(9)
+        assert db.is_authorized(9) is True
+        db.deauthorize(9)
+        assert db.is_authorized(9) is False
