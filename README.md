@@ -1,84 +1,119 @@
+<div align="center">
+
 # 🦉 OwlTrader
 
-**Bot Telegram gratuit et open source qui surveille les marchés (actions · matières premières · devises · crypto), détecte les signaux et te dit quand acheter, vendre ou conserver — clairement, sans te noyer d'infos.**
+**A free, open-source Telegram bot that watches the markets — stocks, crypto, forex, commodities — and tells you when to buy, sell or hold. Clearly, without the noise.**
 
-> ⚠️ Outil **informatif et éducatif**. Aucune recommandation d'investissement réglementée.
-> Aucune exécution d'ordre réel. Tu restes seul responsable de tes décisions.
+[English](README.md) · [Français](README.fr.md)
+
+![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-MIT-green)
+![CI](https://github.com/mkl159/owltrader/actions/workflows/ci.yml/badge.svg)
+![Tests](https://img.shields.io/badge/tests-33%20passing-brightgreen)
+![Paper trading](https://img.shields.io/badge/trading-100%25%20fictional-orange)
+
+</div>
+
+> ⚠️ **Educational tool. Not financial advice. No real orders are ever placed.** OwlTrader trades with *fictional* money so you can learn and experiment with zero risk.
 
 ---
 
-## ✨ Ce que fait OwlTrader
+## 📸 Glimpse
 
-- 📡 **Données de marché** — récupère, nettoie et stocke cours, volumes et séries financières depuis **plusieurs sources gratuites**, en gardant **toujours la donnée la plus récente** (multi-sources + repli automatique).
-- 📐 **Indicateurs & patterns** — moyennes mobiles, RSI, MACD, Bollinger, ATR… et détection de configurations (croisements, ruptures de niveaux, figures chartistes).
-- 🧪 **Backtest** — teste des stratégies sur données historiques avec des métriques de performance.
-- 📰 **Actualités + IA** — agrège des flux d'actu gratuits et les fait **résumer/noter** périodiquement par une IA.
-- 💼 **Portefeuille** — suit *ce que tu as* (P&L) et t'alerte **quand vendre**.
-- 🤖 **Bot Telegram** — messages simples, en français, jamais surchargés (3 lignes max + détail à la demande).
+| Live chart (`/graph`) | Autonomous backtest (`/simuler`) |
+|---|---|
+| ![Price chart](docs/images/chart-aapl.png) | ![Equity curve](docs/images/equity-curve.png) |
 
-## 🗺️ Statut
+A real 5-year simulation of the autonomous mode: **€1000 → €2211 (+121%)**, fees included.
 
-MVP **fonctionnel** : suivi multi-actifs en quasi temps réel (actions, indices, matières premières,
-devises, crypto) via sources gratuites (**Yahoo Finance** + **Stooq** en repli, sélection de la
-donnée la plus fraîche), indicateurs, signaux et bot Telegram.
-Le **[cahier des charges complet](CAHIER_DES_CHARGES.md)** décrit la suite (actus + IA, backtest, patterns avancés).
+---
 
-## 🚀 Démarrage
+## ✨ What it does
+
+- 📡 **Real-time-ish market data** from **multiple free sources** (Yahoo Finance + CoinGecko + Stooq) — always keeps the **freshest** quote, with automatic fallback.
+- 📐 **Indicators & patterns** — RSI, MACD, moving averages, Bollinger, ATR, golden/death cross…
+- 🤖 **Autonomous paper-trading** — give it €1000 of fictional money and it buys/sells on its own, brokerage fees included, logging every move.
+- 🧪 **Backtesting** with pro metrics — Sharpe, Sortino, Calmar, CAGR, max drawdown, profit factor.
+- 💡 **Buy ideas** — scans the market and ranks the best opportunities.
+- 📊 **One-tap market briefing** (`/apercu`) — trend, regime, geopolitical risk, seasonality and top picks, all in one view.
+- 📰 **News + sentiment** — aggregates free RSS feeds and scores them.
+- 🔔 **Price alerts** and **sell alerts** on your holdings.
+- 🛡️ Runs **24/7** (systemd), with daily backups.
+
+---
+
+## 🧠 The strategy (and why it's trustworthy)
+
+OwlTrader is **not** a black box stuffed with 50 magic variables. Every rule is **battle-tested**, and anything that doesn't survive rigorous out-of-sample testing is **thrown away**.
+
+It stands on the shoulders of legendary traders:
+
+| Rule | Inspired by |
+|------|-------------|
+| 📈 Trend-following ensemble | Jesse Livermore / Ed Seykota |
+| 🛡️ Market regime filter (only buy when S&P > its 200-day average) | Paul Tudor Jones |
+| ⚖️ Volatility-based position sizing | Ray Dalio |
+| 🎯 Relative + absolute momentum ranking | Jegadeesh-Titman / Gary Antonacci |
+| ✂️ Stop-loss, let winners run | Ed Seykota |
+
+**Validated across ~98 years** of S&P 500 history (since 1927, through every major crash) and on 3/5/10-year windows. Typical risk-adjusted profile: **CAGR ~15–20%, Sharpe ~0.55–0.62** in fictional backtests.
+
+> The real edge isn't a secret formula — it's the **discipline** of testing everything and keeping only what is robust.
+
+---
+
+## 🚀 Quick start
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+git clone https://github.com/mkl159/owltrader.git
+cd owltrader
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
-```
 
-### Tester tout de suite, sans Telegram
+# Try it instantly, no Telegram needed:
+python -m src.cli analyse STOCK:AAPL
 
-```bash
-python -m src.cli prix AAPL
-python -m src.cli analyse STOCK:MSFT
-python -m src.cli prix CRYPTO:BTC      # crypto
-python -m src.cli prix FX:EURUSD       # devise
-python -m src.cli prix COMMO:GOLD      # matière première
-```
-
-### Lancer le bot Telegram
-
-```bash
-cp .env.example .env        # puis renseigner TELEGRAM_BOT_TOKEN (via @BotFather)
+# Run the bot:
+cp .env.example .env        # add your TELEGRAM_BOT_TOKEN (from @BotFather)
 python -m src.main
 ```
 
-Commandes du bot :
-- 💡 `/idees` (filtrable : `/idees crypto`) · 🚀 `/movers` — scan du marché & pistes d'achat
-- 📊 `/prix` · `/analyse` (avec sentiment des actus) · 📈 `/graph` · 🧪 `/backtest` · 📰 `/actu`
-- 👁️ `/watch` · `/unwatch` · `/liste`
-- 💼 `/ajouter` · `/portefeuille` · `/perf`
-- ⚙️ `/reglages` · `/digest` · `/menu` · `/aide`
-
-**Alertes automatiques** : signaux acheter/vendre sur la watchlist, **alertes de vente sur le
-portefeuille** (signal de vente ou perte importante), et **résumé quotidien**.
-Tout est aussi pilotable **aux boutons** via `/menu`.
-
-## 🔁 Faire tourner en 24/7
-
-Pour que le bot reste actif en permanence (et redémarre seul en cas de crash) :
+### Keep it running 24/7
 
 ```bash
-# Option A — service systemd (démarre au boot, recommandé) :
-sudo bash deploy/install-systemd.sh
-journalctl -u owltrader -f        # voir les logs
-
-# Option B — sans sudo, supervision dans un terminal (ou tmux/screen) :
-bash deploy/run.sh
+sudo bash deploy/install-systemd.sh    # auto-start at boot, auto-restart on crash
 ```
 
-La base SQLite est **sauvegardée automatiquement chaque jour** (`data/backups/`, 7 dernières copies).
+---
 
-## 🆓 100 % gratuit
+## 🤖 Telegram commands
 
-OwlTrader fonctionne **sans aucune clé payante** (yfinance, Stooq, CoinGecko, Frankfurter, flux RSS…).
-Des clés gratuites optionnelles ne servent qu'à renforcer la robustesse.
+| | |
+|---|---|
+| 📊 `/apercu` | Full market briefing (everything at a glance) |
+| 🤖 `/auto 1000` | Start autonomous mode with €1000 fictional |
+| 🧪 `/simuler` | Backtest + pro metrics |
+| 💡 `/idees` | Best buy opportunities |
+| 📈 `/analyse AAPL` · `/graph AAPL` | Asset analysis & chart |
+| 🌍 `/marche` · `/risque` · `/saison` | Market trend, risk climate, seasonality |
+| 🔔 `/alerte AAPL 200` | Price alert |
+| 🌐 `/univers` · `/sources` | Customize universe / see data sources |
+| 🏆 `/maitres` | The legendary traders behind the bot |
 
-## 📜 Licence
+Everything is also reachable through tap-friendly menus (`/menu`).
 
-[MIT](LICENSE) — libre d'utilisation, de modification et de partage.
+---
+
+## 🆓 100% free
+
+Works with **no paid keys** (yfinance, CoinGecko, Stooq, free RSS). Optional free keys (Alpaca paper trading, etc.) only add robustness.
+
+## 📜 License
+
+[MIT](LICENSE) — free to use, modify and share.
+
+---
+
+<div align="center">
+<sub>Built with discipline, not hype. ⚠️ Educational only — you are responsible for your own decisions.</sub>
+</div>
