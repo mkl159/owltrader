@@ -63,9 +63,13 @@ SENSIBILITES = {
 
 WELCOME = (
     "🦉 *Bienvenue sur OwlTrader !*\n\n"
-    "Je surveille les marchés (actions, matières premières, devises, crypto) depuis plusieurs "
-    "sources gratuites et je te dis quand *acheter*, *vendre* ou *conserver* — sans te noyer d'infos.\n\n"
-    "👉 Tout se gère ci-dessous, ou tape /aide pour la liste des commandes."
+    "Ton assistant de marché — actions, crypto, devises, matières premières — qui te dit "
+    "*acheter*, *vendre* ou *conserver*, sans jargon et sans te noyer d'infos.\n\n"
+    "✨ *Pour bien démarrer :*\n"
+    "1️⃣ 🧪 *Simuler* — vois la stratégie prouvée sur 10 ans\n"
+    "2️⃣ 🤖 *Mode autonome* — confie-lui 1000 € fictifs, il trade tout seul\n"
+    "3️⃣ 💡 *Idées d'achat* — les meilleures opportunités du moment\n\n"
+    "_100 % gratuit · trading fictif · aucun risque. Touche un bouton 👇_"
 )
 
 HELP = (
@@ -326,9 +330,10 @@ async def alpaca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         acc, pos = await asyncio.to_thread(_fetch)
     except Exception as e:  # noqa: BLE001
+        from ..formatting import esc_md
         return await msg.edit_text(
             "❌ *Alpaca non connecté.*\n"
-            f"_{str(e)[:200]}_\n\n"
+            f"_{esc_md(str(e)[:200])}_\n\n"
             "Pour l'activer : crée un compte gratuit sur *alpaca.markets*, génère des clés "
             "*paper trading*, et ajoute dans `.env` :\n"
             "`ALPACA_API_KEY_ID=...`\n`ALPACA_API_SECRET=...`",
@@ -357,6 +362,21 @@ async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def maitres(update: Update, context: ContextTypes.DEFAULT_TYPE):
     from ..formatting import masters_block
     await update.message.reply_text(masters_block(), parse_mode=MD)
+
+
+async def sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Transparence : quelles sources de données alimentent le bot."""
+    router = _svc(context).router
+    noms = ", ".join(p.name for p in router.providers)
+    await update.message.reply_text(
+        "📡 *Sources de données (toutes gratuites)*\n\n"
+        f"Actives : *{noms}*\n\n"
+        "• *yfinance* (Yahoo) — actions, indices, matières, devises, crypto\n"
+        "• *CoinGecko* — crypto, cours très frais 24/7\n"
+        "• *Stooq* — repli\n\n"
+        "🔄 Pour chaque cours, je récupère *toutes* les sources en parallèle et je garde "
+        "*la plus fraîche*. Si l'une tombe, les autres prennent le relais — jamais de trou.",
+        parse_mode=MD)
 
 
 async def saison(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1118,6 +1138,21 @@ def build_application() -> Application:
             "(obtenu auprès de @BotFather). Pour tester sans Telegram : python -m src.cli analyse AAPL"
         )
     app = Application.builder().token(token).build()
+
+    # Filet de sécurité : si un message au format Markdown échoue, on le renvoie en texte simple.
+    from telegram.error import BadRequest
+    _orig_send = app.bot.send_message
+
+    async def _safe_send(*args, **kwargs):
+        try:
+            return await _orig_send(*args, **kwargs)
+        except BadRequest as e:
+            if kwargs.get("parse_mode") and "parse" in str(e).lower():
+                kwargs.pop("parse_mode", None)
+                return await _orig_send(*args, **kwargs)
+            raise
+    app.bot.send_message = _safe_send
+
     app.bot_data["svc"] = MarketService()
     db = Storage()
     db.seed_universe(CONFIG.get("univers_scan", []))
@@ -1139,6 +1174,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
     app.add_handler(CommandHandler(["maitres", "legendes", "masters"], maitres))
+    app.add_handler(CommandHandler(["sources", "source"], sources))
     app.add_handler(CommandHandler(["saison", "season"], saison))
     app.add_handler(CommandHandler(["risque", "risk", "geopolitique"], risque))
     app.add_handler(CommandHandler(["univers", "universe"], univers))

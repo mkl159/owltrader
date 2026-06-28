@@ -63,11 +63,17 @@ def analysis_full(a: Analysis) -> str:
     return "\n".join(parts)
 
 
-def _esc(text: str) -> str:
-    # échappe les caractères Markdown susceptibles de casser le rendu
+def esc_md(text: str) -> str:
+    """Neutralise les caractères Markdown d'un texte externe (titres, erreurs, symboles)."""
+    if not text:
+        return ""
     for ch in ("_", "*", "[", "]", "`"):
         text = text.replace(ch, " ")
     return text
+
+
+# alias interne historique
+_esc = esc_md
 
 
 def news_block(symbol: str, items: list[NewsItem]) -> str:

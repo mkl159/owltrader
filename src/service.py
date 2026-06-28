@@ -19,12 +19,18 @@ log = logging.getLogger(__name__)
 
 
 def build_router() -> DataRouter:
-    """Construit le routeur avec les sources gratuites disponibles (yfinance + Stooq en repli)."""
+    """Construit le routeur multi-sources gratuites.
+
+    yfinance (large, en premier pour l'historique long) + CoinGecko (crypto, cours très
+    frais 24/7) + Stooq (repli). Pour les COTATIONS, le routeur garde toujours la plus fraîche.
+    """
     providers = []
     try:
         providers.append(YFinanceProvider())
     except Exception as e:  # noqa: BLE001
         log.warning("yfinance indisponible : %s", e)
+    from .collectors.coingecko_provider import CoinGeckoProvider
+    providers.append(CoinGeckoProvider())
     providers.append(StooqProvider())
     return DataRouter(providers)
 

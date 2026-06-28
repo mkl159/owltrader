@@ -58,3 +58,18 @@ def test_storage_backup():
         # la sauvegarde est une base lisible
         restored = Storage(dest)
         assert restored.paper_get(7)["cash"] == 1000
+
+
+def test_esc_md():
+    from src.formatting import esc_md
+    assert esc_md("a_b*c[d]`e") == "a b c d  e"
+    assert esc_md("") == ""
+
+
+def test_coingecko_supports():
+    from src.collectors.coingecko_provider import CoinGeckoProvider
+    from src.symbols import Asset
+    cg = CoinGeckoProvider()
+    assert cg.supports(Asset.parse("CRYPTO:BTC")) is True
+    assert cg.supports(Asset.parse("STOCK:AAPL")) is False
+    assert cg.supports(Asset.parse("CRYPTO:UNKNOWNXYZ")) is False
