@@ -9,7 +9,7 @@
 ![Python](https://img.shields.io/badge/Python-3.11+-blue?logo=python&logoColor=white)
 ![License](https://img.shields.io/badge/License-MIT-green)
 ![CI](https://github.com/mkl159/owltrader/actions/workflows/ci.yml/badge.svg)
-![Tests](https://img.shields.io/badge/tests-33%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-passing-brightgreen)
 ![Paper trading](https://img.shields.io/badge/trading-100%25%20fictional-orange)
 
 </div>

@@ -85,6 +85,10 @@ class Storage:
                 CREATE TABLE IF NOT EXISTS kv_config (
                     key TEXT PRIMARY KEY, value TEXT
                 );
+                CREATE TABLE IF NOT EXISTS audit_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts TEXT, chat_id INTEGER, event TEXT, detail TEXT
+                );
                 CREATE TABLE IF NOT EXISTS price_alerts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     chat_id INTEGER, asset TEXT, target REAL,
@@ -271,6 +275,20 @@ class Storage:
     def all_authorized(self) -> list[int]:
         with self._conn() as c:
             return [r["chat_id"] for r in c.execute("SELECT chat_id FROM authorized").fetchall()]
+
+    # --- Journal d'audit de sécurité ---
+    def log_event(self, chat_id: int, event: str, detail: str = ""):
+        with self._conn() as c:
+            c.execute("INSERT INTO audit_log (ts, chat_id, event, detail) VALUES (?,?,?,?)",
+                      (datetime.now(timezone.utc).isoformat(), chat_id, event, detail))
+            # rotation : on garde les 500 derniers évènements
+            c.execute("DELETE FROM audit_log WHERE id NOT IN "
+                      "(SELECT id FROM audit_log ORDER BY id DESC LIMIT 500)")
+
+    def recent_audit(self, limit: int = 12) -> list[dict]:
+        with self._conn() as c:
+            rows = c.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+        return [dict(r) for r in rows]
 
     def has_settings(self, chat_id: int) -> bool:
         with self._conn() as c:

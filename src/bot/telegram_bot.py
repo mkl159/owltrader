@@ -112,6 +112,7 @@ HELP = (
     "• /portefeuille · /perf\n\n"
     "🔌 *Connecteurs & sauvegarde*\n"
     "• /config — régler les clés API (chiffrées) · /set · /del\n"
+    "• /securite — tableau de bord sécurité · /deconnexion\n"
     "• /broker — connexion à un échange (Binance, Kraken… via ccxt)\n"
     "• /export — exporter la config · /sauvegarde — sauvegarder la base\n\n"
     "⚙️ *Réglages* : /reglages · /digest · /menu · /langue\n\n"
@@ -138,6 +139,7 @@ HELP_EN = (
     "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
     "🔌 *Connectors & backup*\n"
     "• /config — set API keys (encrypted) · /set · /del\n"
+    "• /securite — security dashboard · /deconnexion (logout)\n"
     "• /broker — connect to an exchange (Binance, Kraken… via ccxt)\n"
     "• /export — export config · /sauvegarde — back up the database\n\n"
     "⚙️ *Settings* : /reglages · /digest · /menu · /langue\n\n"
@@ -288,6 +290,8 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     attempts = context.application.bot_data.setdefault("auth_attempts", {})
     rec = attempts.setdefault(chat.id, {"count": 0, "until": 0.0, "alerted": False})
     now = time.time()
+    u = update.effective_user
+    who = f"{getattr(u, 'full_name', '')} (@{getattr(u, 'username', None) or '—'}, id {chat.id})"
 
     # Verrouillage actif
     if rec["until"] > now:
@@ -309,6 +313,7 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Bon mot de passe
     if text and text == pwd:
         db.authorize(chat.id)
+        db.log_event(chat.id, "auth_ok", who)
         attempts.pop(chat.id, None)
         await _alert_admins(context, update, "✅ Nouvel accès autorisé · New authorized access")
         await context.bot.send_message(
@@ -318,8 +323,10 @@ async def auth_gate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Tentative échouée (texte non vide = vraie tentative)
     if text:
         rec["count"] += 1
+        db.log_event(chat.id, "auth_fail", f"{who} (tentative {rec['count']})")
         if rec["count"] >= MAX_ATTEMPTS:
             rec["until"] = now + LOCKOUT_SECONDS
+            db.log_event(chat.id, "lockout", who)
             await _alert_admins(context, update,
                                 f"🔒 {rec['count']} échecs de mot de passe → verrouillé 15 min · locked")
             await context.bot.send_message(
@@ -593,6 +600,41 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("Clé inconnue · Unknown key.")
     _db(context).del_config(key)
     await update.message.reply_text(f"🗑️ `{key}` effacé · cleared.", parse_mode=MD)
+
+
+async def securite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Tableau de bord sécurité : accès autorisés + journal d'audit."""
+    db = _db(context)
+    protected = bool(get_secret("ACCESS_PASSWORD"))
+    auth = db.all_authorized()
+    lines = [
+        "🛡️ *Sécurité · Security*", "",
+        f"🔒 Protection mot de passe : {'✅ active' if protected else '❌ inactive'}",
+        "🔐 Secrets chiffrés en base : ✅ (AES/Fernet)",
+        f"👥 Accès autorisés · authorized : *{len(auth)}*", "",
+        "📜 *Journal récent · Recent log*",
+    ]
+    icons = {"auth_ok": "✅", "auth_fail": "⚠️", "lockout": "🔒", "attempt": "🔐"}
+    events = db.recent_audit(10)
+    if events:
+        for e in events:
+            ts = e["ts"][5:16].replace("T", " ")
+            lines.append(f"{icons.get(e['event'], '•')} {ts} — {e['detail'][:60]}")
+    else:
+        lines.append("_(aucun évènement · no events)_")
+    lines.append("\n_/deconnexion pour révoquer ton accès · revoke your access._")
+    await update.message.reply_text("\n".join(lines), parse_mode=MD)
+
+
+async def deconnexion_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Révoque l'accès de l'utilisateur (mot de passe redemandé ensuite)."""
+    chat_id = update.effective_chat.id
+    db = _db(context)
+    db.deauthorize(chat_id)
+    db.log_event(chat_id, "logout", "déconnexion volontaire")
+    await update.message.reply_text(
+        "🔓 *Déconnecté · Logged out.*\nLe mot de passe sera redemandé · Password will be required again.",
+        parse_mode=MD)
 
 
 async def broker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1495,6 +1537,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["securite", "security"], securite_cmd))
+    app.add_handler(CommandHandler(["deconnexion", "logout"], deconnexion_cmd))
     app.add_handler(CommandHandler(["config", "configuration"], config_cmd))
     app.add_handler(CommandHandler("set", set_cmd))
     app.add_handler(CommandHandler(["del", "supprimer"], del_cmd))
