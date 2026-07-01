@@ -390,12 +390,33 @@ async def prix(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(quote_line(q), parse_mode=MD)
 
 
+def _analysis_extras(svc, raw: str) -> str:
+    """Tendance agrégée + consensus de l'équipe, en 2 lignes (grâce au cache, quasi gratuit)."""
+    lines = []
+    try:
+        tr = svc.trend(raw, with_news=False)
+        if tr:
+            lines.append(f"{tr.emoji} Tendance agrégée : *{tr.label}* ({tr.score:+.0f}/100)")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        votes = svc.team_votes(raw)
+        if votes:
+            pour = sum(1 for v in votes.values() if v)
+            lines.append(f"👥 Équipe : *{pour}/{len(votes)}* achèteraient (/equipe {raw.split(':')[-1]})")
+    except Exception:  # noqa: BLE001
+        pass
+    return ("\n" + "\n".join(lines)) if lines else ""
+
+
 async def analyse(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Usage : /analyse AAPL")
     msg = await update.message.reply_text("⏳ Analyse en cours…")
-    a = await asyncio.to_thread(_svc(context).analyze, context.args[0])
-    await msg.edit_text(analysis_full(a), parse_mode=MD,
+    svc = _svc(context)
+    a = await asyncio.to_thread(svc.analyze, context.args[0])
+    extras = await asyncio.to_thread(_analysis_extras, svc, a.asset.raw)
+    await msg.edit_text(analysis_full(a) + extras, parse_mode=MD,
                         reply_markup=asset_keyboard(a.asset.raw))
 
 

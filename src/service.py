@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from typing import Optional
@@ -43,12 +45,50 @@ class Analysis:
     indicators: dict
 
 
+class _TTLCache:
+    """Cache mémoire avec TTL + repli sur donnée périmée en cas d'échec réseau."""
+
+    def __init__(self):
+        self._data: dict = {}
+        self._lock = threading.Lock()
+
+    def get_or_fetch(self, key, ttl: float, fetch):
+        now = time.time()
+        with self._lock:
+            hit = self._data.get(key)
+        if hit and now - hit[0] < ttl:
+            return hit[1]
+        try:
+            value = fetch()
+        except Exception:  # noqa: BLE001
+            value = None
+        if value is None or (hasattr(value, "__len__") and len(value) == 0):
+            # échec réseau : on sert l'ancienne valeur plutôt que rien (stale-if-error)
+            return hit[1] if hit else value
+        with self._lock:
+            self._data[key] = (now, value)
+            # purge simple pour éviter la croissance infinie
+            if len(self._data) > 500:
+                oldest = sorted(self._data.items(), key=lambda kv: kv[1][0])[:100]
+                for k, _ in oldest:
+                    self._data.pop(k, None)
+        return value
+
+
+# TTLs : cotations très courtes (fraîcheur), historiques journaliers plus longs
+QUOTE_TTL = 60          # 1 min
+HISTORY_TTL = 900       # 15 min (bougies journalières : inutile de re-télécharger plus souvent)
+
+
 class MarketService:
     def __init__(self, router: DataRouter | None = None):
         self.router = router or build_router()
+        self._cache = _TTLCache()
 
     def quote(self, raw: str) -> Optional[Quote]:
-        return self.router.get_quote(Asset.parse(raw))
+        asset = Asset.parse(raw)
+        return self._cache.get_or_fetch(
+            ("q", asset.raw), QUOTE_TTL, lambda: self.router.get_quote(asset))
 
     def analyze(self, raw: str, with_news: bool = True) -> Analysis:
         asset = Asset.parse(raw)
@@ -92,7 +132,10 @@ class MarketService:
         return run_backtest(asset.raw, df, short, long) if df is not None else None
 
     def history(self, raw: str, period: str = "1y"):
-        return self.router.get_history(Asset.parse(raw), period=period, interval="1d")
+        asset = Asset.parse(raw)
+        return self._cache.get_or_fetch(
+            ("h", asset.raw, period), HISTORY_TTL,
+            lambda: self.router.get_history(asset, period=period, interval="1d"))
 
     def fetch_histories(self, universe: list[str], period: str = "2y") -> dict:
         """Récupère en parallèle l'historique de tout un univers : {actif: df}."""
