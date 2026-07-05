@@ -110,6 +110,8 @@ HELP = (
     "💼 *Portefeuille*\n"
     "• /ajouter `AAPL 10 180` — qté, prix d'achat\n"
     "• /portefeuille · /perf\n\n"
+    "🧠 *Conseiller IA (facultatif)*\n"
+    "• /ia — avis OpenAI acheter/vendre (1 req/jour, activable/désactivable)\n\n"
     "🔌 *Connecteurs & sauvegarde*\n"
     "• /config — régler les clés API (chiffrées) · /set · /del\n"
     "• /securite — tableau de bord sécurité · /deconnexion\n"
@@ -137,6 +139,8 @@ HELP_EN = (
     "• /alerte `AAPL 200` · /alertes · /univers · /sources\n\n"
     "👁️ *Watchlist* : /watch · /unwatch · /liste\n"
     "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
+    "🧠 *AI advisor (optional)*\n"
+    "• /ia — OpenAI buy/sell advice (1 req/day, toggleable)\n\n"
     "🔌 *Connectors & backup*\n"
     "• /config — set API keys (encrypted) · /set · /del\n"
     "• /securite — security dashboard · /deconnexion (logout)\n"
@@ -567,6 +571,9 @@ CONFIG_KEYS = {
     "EXCHANGE_API_KEY": ("Exchange API key", True),
     "EXCHANGE_API_SECRET": ("Exchange API secret", True),
     "ANTHROPIC_API_KEY": ("Anthropic key (IA actus)", True),
+    "OPENAI_API_KEY": ("OpenAI key (conseiller IA)", True),
+    "OPENAI_MODEL": ("Modèle OpenAI (ex: gpt-5.4-mini)", False),
+    "AI_MAX_TOKENS": ("Plafond tokens sortie IA", False),
 }
 
 
@@ -621,6 +628,92 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await update.message.reply_text("Clé inconnue · Unknown key.")
     _db(context).del_config(key)
     await update.message.reply_text(f"🗑️ `{key}` effacé · cleared.", parse_mode=MD)
+
+
+# --------------------------------------------------------------------------- #
+#  Conseiller IA (OpenAI) — facultatif, 1 requête/jour max
+# --------------------------------------------------------------------------- #
+def _ia_keyboard(db) -> InlineKeyboardMarkup:
+    live_on = db.get_config("AI_ENABLED") == "1"
+    sim_on = db.get_config("AI_SIM_ENABLED") == "1"
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(("🟢 Conseil quotidien : ON" if live_on else "⚪ Conseil quotidien : OFF"),
+                              callback_data="ia:toggle_live")],
+        [InlineKeyboardButton(("🟢 Avis IA sur /simuler : ON" if sim_on else "⚪ Avis IA sur /simuler : OFF"),
+                              callback_data="ia:toggle_sim")],
+        [InlineKeyboardButton("💬 Demander un avis maintenant", callback_data="ia:ask")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
+    ])
+
+
+def _ia_status_text(db) -> str:
+    from .. import ai_advisor as ai
+    ok = ai.is_configured()
+    quota = "✅ disponible aujourd'hui" if ai.can_call(db) else "⏳ déjà utilisée aujourd'hui (1/jour)"
+    model = (db.get_config("OPENAI_MODEL") or ai.DEFAULT_MODEL)
+    return (
+        "🧠 *Conseiller IA (OpenAI)* — facultatif\n\n"
+        f"Clé configurée : {'✅' if ok else '❌ (utilise /set OPENAI_API_KEY ta-clé)'}\n"
+        f"Modèle : `{model}` · Requête du jour : {quota}\n\n"
+        "Il agrège TOUT (positions, signaux, marché, risque, actus RSS) et donne un avis "
+        "*agressif orienté gains* : renforcer / vendre / garder + opportunités.\n"
+        "Limites : 1 requête/jour · pas d'appel sans position en cours.\n\n"
+        "_⚠️ Avis d'IA, pas un conseil financier. Les autres analyses du bot restent actives._"
+    )
+
+
+async def ia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    db = _db(context)
+    await update.message.reply_text(_ia_status_text(db), parse_mode=MD,
+                                    reply_markup=_ia_keyboard(db))
+
+
+async def _ia_ask_and_send(chat_id, context, source: str = "live"):
+    """Construit le contexte, appelle OpenAI (si quota/positions OK) et envoie l'avis."""
+    from .. import ai_advisor as ai
+    from ..formatting import esc_md
+    db = _db(context)
+    svc = _svc(context)
+    if not ai.is_configured():
+        return await context.bot.send_message(
+            chat_id, "❌ Clé OpenAI absente. Configure-la : `/set OPENAI_API_KEY ta-clé`", parse_mode=MD)
+    if not ai.can_call(db):
+        return await context.bot.send_message(
+            chat_id, "⏳ La requête IA du jour a déjà été utilisée (limite : 1/jour).")
+    positions = db.paper_positions(chat_id)
+    if source == "live" and not positions:
+        return await context.bot.send_message(
+            chat_id, "📭 Aucune position en cours → pas de requête envoyée (économie du quota).")
+    msg = await context.bot.send_message(chat_id, "🧠 J'agrège le contexte et j'interroge l'IA…")
+    try:
+        ctx_text = await asyncio.to_thread(ai.build_context, svc, db, chat_id, _universe())
+        advice = await asyncio.to_thread(ai.ask, ctx_text)
+        ai.record_call(db)
+        db.log_event(chat_id, "ai_call", f"source={source}")
+        await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3800]}", parse_mode=MD)
+    except Exception as e:  # noqa: BLE001
+        await msg.edit_text(f"❌ Échec de l'appel IA : {esc_md(str(e)[:200])}")
+
+
+async def ia_daily_job(context: ContextTypes.DEFAULT_TYPE):
+    """Conseil IA quotidien automatique (si activé, configuré, quota dispo et positions).
+
+    Économie de tokens : pas d'appel les jours de bourse fermée (week-end + fériés US).
+    """
+    from datetime import datetime as _dt
+    from .. import ai_advisor as ai
+    from ..seasonality import is_market_holiday
+    db: Storage = context.application.bot_data["db"]
+    if db.get_config("AI_ENABLED") != "1" or not ai.is_configured() or not ai.can_call(db):
+        return
+    today = _dt.now()
+    if today.weekday() >= 5 or is_market_holiday():
+        log.info("IA quotidienne : bourse fermée (week-end/férié), pas d'appel.")
+        return
+    for chat_id in db.paper_active_chats():
+        if db.paper_positions(chat_id):
+            await _ia_ask_and_send(chat_id, context, source="daily")
+            break  # 1 requête/jour au total
 
 
 async def securite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -941,6 +1034,35 @@ async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             with open(path, "rb") as f:
                 await context.bot.send_photo(update.effective_chat.id, photo=f,
                                              caption="📈 Évolution simulée du capital")
+        await _ia_sim_comment(update.effective_chat.id, context, r)
+
+
+async def _ia_sim_comment(chat_id, context, r):
+    """Avis IA sur les résultats de simulation (si activé) — mêmes limites (1/jour)."""
+    from .. import ai_advisor as ai
+    from ..formatting import esc_md
+    db = _db(context)
+    if db.get_config("AI_SIM_ENABLED") != "1" or not ai.is_configured():
+        return
+    if not ai.can_call(db):
+        return await context.bot.send_message(
+            chat_id, "🧠 Avis IA sur la simulation : quota du jour déjà utilisé (1/jour).")
+    try:
+        ctx = (f"RÉSULTATS DE SIMULATION (backtest {r.equity_curve.index[0].date()} → "
+               f"{r.equity_curve.index[-1].date()}), capital {r.capital:.0f} → {r.final_equity:.2f} : "
+               f"rendement {r.total_return*100:+.1f}%, CAGR {r.cagr*100:+.1f}%, Sharpe {r.sharpe}, "
+               f"Sortino {r.sortino}, drawdown max {r.max_drawdown*100:.1f}%, "
+               f"{r.n_trades} trades, réussite {r.win_rate*100:.0f}%, "
+               f"profit factor {r.profit_factor}, frais {r.fees_total:.0f}.")
+        advice = await asyncio.to_thread(
+            ai.ask, ctx, "Analyse ces résultats de backtest : forces, faiblesses, et 2-3 pistes "
+                         "concrètes pour améliorer le rendement (profil agressif).")
+        ai.record_call(db)
+        db.log_event(chat_id, "ai_call", "source=simulation")
+        await context.bot.send_message(
+            chat_id, f"🧠 *Avis IA sur la simulation*\n\n{esc_md(advice)[:3800]}", parse_mode=MD)
+    except Exception as e:  # noqa: BLE001
+        await context.bot.send_message(chat_id, f"❌ Avis IA indisponible : {esc_md(str(e)[:150])}")
 
 
 async def autotune(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1228,6 +1350,19 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await q.edit_message_text(
             f"🎚️ Agressivité réglée sur *{name}*.", parse_mode=MD,
             reply_markup=back_button("auto_menu"))
+    if data.startswith("ia:"):
+        action = data.split(":", 1)[1]
+        if action == "toggle_live":
+            cur = db.get_config("AI_ENABLED") == "1"
+            db.set_config("AI_ENABLED", "0" if cur else "1")
+        elif action == "toggle_sim":
+            cur = db.get_config("AI_SIM_ENABLED") == "1"
+            db.set_config("AI_SIM_ENABLED", "0" if cur else "1")
+        elif action == "ask":
+            await q.edit_message_text("🧠 Demande en cours…")
+            return await _ia_ask_and_send(chat_id, context, source="manuel")
+        return await q.edit_message_text(_ia_status_text(db), parse_mode=MD,
+                                         reply_markup=_ia_keyboard(db))
     if data.startswith("delalert:"):
         db.remove_price_alert(int(data.split(":", 1)[1]), chat_id)
         al = db.get_price_alerts(chat_id)
@@ -1558,6 +1693,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["marche", "market"], marche))
     app.add_handler(CommandHandler(["equipe", "team"], equipe))
     app.add_handler(CommandHandler("alpaca", alpaca_cmd))
+    app.add_handler(CommandHandler(["ia", "ai", "conseiller"], ia_cmd))
     app.add_handler(CommandHandler(["securite", "security"], securite_cmd))
     app.add_handler(CommandHandler(["deconnexion", "logout"], deconnexion_cmd))
     app.add_handler(CommandHandler(["config", "configuration"], config_cmd))
@@ -1607,5 +1743,7 @@ def build_application() -> Application:
     app.job_queue.run_daily(auto_bilan_job, time=dtime(hour=18, minute=0))
     app.job_queue.run_daily(autotune_job, time=dtime(hour=7, minute=0))
     app.job_queue.run_daily(backup_job, time=dtime(hour=6, minute=0))
+    # Conseil IA quotidien (si activé) — 17h30, uniquement les jours de bourse ouverte
+    app.job_queue.run_daily(ia_daily_job, time=dtime(hour=17, minute=30))
     app.job_queue.run_repeating(alerts_job, interval=auto_min * 60, first=60)
     return app
