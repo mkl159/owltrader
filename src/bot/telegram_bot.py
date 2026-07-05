@@ -722,13 +722,15 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
             dev = _paper_cfg().get("devise", "EUR")
             if executed:
                 for tr in executed:
+                    tag = ("\n🔍 _découverte IA via les actus — ajoutée à ton univers de suivi_"
+                           if "découverte" in tr.get("motif", "")
+                           else "\n🧠 _ordre du conseiller IA_")
                     await context.bot.send_message(
                         chat_id,
                         trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
-                                  tr.get("pnl") if tr["side"] == "VENTE" else None, dev) +
-                        "\n🧠 _ordre du conseiller IA_",
+                                  tr.get("pnl") if tr["side"] == "VENTE" else None, dev) + tag,
                         parse_mode=MD)
-                    db.log_event(chat_id, "ai_exec", f"{tr['side']} {tr['asset']}")
+                    db.log_event(chat_id, "ai_exec", f"{tr['side']} {tr['asset']} ({tr.get('motif','')})")
                 acc2, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
                 invested = sum(h["value"] for h in holdings)
                 await context.bot.send_message(

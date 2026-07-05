@@ -189,11 +189,17 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
         equity_now += p["quantity"] * price
     for o in [o for o in orders if o["action"] == "BUY"]:
         asset = Asset.parse(o["asset"]).raw
-        if asset in held or asset not in known or len(held) >= max_pos:
+        if asset in held or len(held) >= max_pos:
             continue
         q = svc.quote(asset)
         if q is None or not (q.price == q.price) or q.price <= 0:
-            continue
+            continue  # actif non cotable (ticker inventé/illiquide) -> ignoré
+        discovered = asset not in known
+        if discovered:
+            # Découverte IA (via actus) : on l'ajoute à l'univers pour que le bot
+            # le suive ensuite (stop-loss, signaux de vente, surveillance).
+            db.add_to_universe(asset)
+            known.add(asset)
         target = min(equity_now * alloc / 100.0, cash - fee_min)
         if target < 10:
             continue
@@ -209,7 +215,8 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
         db.paper_add_position(chat_id, asset, qty, price, fee)
         db.paper_record_trade(chat_id, asset, "ACHAT", qty, price, fee, 0.0)
         executed.append({"side": "ACHAT", "asset": asset, "quantity": qty, "price": price,
-                         "fee": fee, "pnl": 0.0, "motif": "ordre IA"})
+                         "fee": fee, "pnl": 0.0,
+                         "motif": "découverte IA (actus)" if discovered else "ordre IA"})
         held[asset] = {"quantity": qty, "entry_price": price, "entry_fee": fee}
 
     db.paper_set_cash(chat_id, cash)

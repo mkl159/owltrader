@@ -96,6 +96,11 @@ def test_execute_orders_paper():
     ex2 = trader.execute_orders(db, svc, 1, [{"action": "SELL", "asset": "STOCK:AAPL"}], cfg, uni)
     assert len(ex2) == 1 and ex2[0]["side"] == "VENTE"
     assert db.paper_positions(1) == []
-    # actif inconnu -> ignoré
-    ex3 = trader.execute_orders(db, svc, 1, [{"action": "BUY", "asset": "STOCK:INCONNU"}], cfg, uni)
-    assert ex3 == []
+    # actif HORS liste mais cotable -> DÉCOUVERTE : acheté + ajouté à l'univers
+    ex3 = trader.execute_orders(db, svc, 1, [{"action": "BUY", "asset": "STOCK:PLTR"}], cfg, uni)
+    assert len(ex3) == 1 and "découverte" in ex3[0]["motif"]
+    assert "STOCK:PLTR" in db.get_universe()
+    # actif inconnu SANS cotation -> refusé
+    svc.quote.return_value = None
+    ex4 = trader.execute_orders(db, svc, 1, [{"action": "BUY", "asset": "STOCK:FAUXTICKER"}], cfg, uni)
+    assert ex4 == []
