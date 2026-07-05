@@ -115,6 +115,7 @@ HELP = (
     "🔌 *Connecteurs & sauvegarde*\n"
     "• /config — régler les clés API (chiffrées) · /set · /del\n"
     "• /securite — tableau de bord sécurité · /deconnexion\n"
+    "• /traderepublic — lire ton compte TR réel (cash, positions) — lecture seule\n"
     "• /broker — connexion à un échange (Binance, Kraken… via ccxt)\n"
     "• /export — exporter la config · /sauvegarde — sauvegarder la base\n\n"
     "⚙️ *Réglages* : /reglages · /digest · /menu · /langue\n\n"
@@ -576,6 +577,8 @@ CONFIG_KEYS = {
     "OPENAI_API_KEY": ("OpenAI key (conseiller IA)", True),
     "OPENAI_MODEL": ("Modèle OpenAI (ex: gpt-5.4-mini)", False),
     "AI_MAX_TOKENS": ("Plafond tokens sortie IA", False),
+    "TR_PHONE": ("Trade Republic — téléphone (+33…)", True),
+    "TR_PIN": ("Trade Republic — code PIN", True),
 }
 
 
@@ -804,6 +807,90 @@ async def deconnexion_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔓 *Déconnecté · Logged out.*\nLe mot de passe sera redemandé · Password will be required again.",
         parse_mode=MD)
+
+
+async def traderepublic_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lit le compte Trade Republic réel (cash, positions, valeur). Lecture seule."""
+    from ..formatting import esc_md
+    chat_id = update.effective_chat.id
+    phone = get_secret("TR_PHONE")
+    pin = get_secret("TR_PIN")
+    if not phone or not pin:
+        return await update.message.reply_text(
+            "🏦 *Trade Republic* (lecture seule · argent réel)\n\n"
+            "Configure d'abord tes accès (stockés chiffrés) :\n"
+            "`/set TR_PHONE +33...`\n`/set TR_PIN ****`\n"
+            "Puis relance /traderepublic — je t'enverrai un code 2FA à confirmer.\n\n"
+            "_Le bot LIT ton compte et te conseille ; il ne passe jamais d'ordre "
+            "(tu valides dans l'app TR)._", parse_mode=MD)
+    msg = await update.message.reply_text("🏦 Connexion à Trade Republic…")
+
+    def _connect_or_2fa():
+        from ..brokers.traderepublic import TradeRepublicBroker
+        b = TradeRepublicBroker()
+        if b.resume():                      # session déjà valide (cookies)
+            return ("ok", b)
+        api, countdown = TradeRepublicBroker.begin_login(phone, pin)  # envoie le 2FA
+        return ("2fa", api, countdown)
+
+    try:
+        res = await asyncio.to_thread(_connect_or_2fa)
+    except Exception as e:  # noqa: BLE001
+        return await msg.edit_text(f"❌ Connexion TR impossible : {esc_md(str(e)[:200])}")
+
+    if res[0] == "2fa":
+        context.application.bot_data.setdefault("tr_pending", {})[chat_id] = (res[1], res[2])
+        return await msg.edit_text(
+            "🔐 Trade Republic t'a envoyé un *code 2FA* (dans l'app / par SMS).\n"
+            "Renvoie-le-moi : `/tr_code 1234`", parse_mode=MD)
+    await _tr_show_account(msg, res[1])
+
+
+async def tr_code_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    from ..formatting import esc_md
+    chat_id = update.effective_chat.id
+    pending = context.application.bot_data.get("tr_pending", {}).get(chat_id)
+    if not pending or not context.args:
+        return await update.message.reply_text("Usage : /tr_code 1234 (après /traderepublic)")
+    api, countdown = pending
+    code = context.args[0].strip()
+    try:
+        await update.message.delete()       # le code 2FA ne reste pas dans le chat
+    except Exception:  # noqa: BLE001
+        pass
+    msg = await context.bot.send_message(chat_id, "🔐 Validation du code…")
+
+    def _finish():
+        from ..brokers.traderepublic import TradeRepublicBroker
+        return TradeRepublicBroker.finish_login(api, countdown, code)
+
+    try:
+        b = await asyncio.to_thread(_finish)
+    except Exception as e:  # noqa: BLE001
+        return await msg.edit_text(f"❌ Code refusé / erreur : {esc_md(str(e)[:200])}")
+    context.application.bot_data.get("tr_pending", {}).pop(chat_id, None)
+    await _tr_show_account(msg, b)
+
+
+async def _tr_show_account(msg, broker):
+    from ..formatting import esc_md
+    try:
+        acc = await asyncio.to_thread(broker.get_account)
+        pos = await asyncio.to_thread(broker.get_positions)
+    except Exception as e:  # noqa: BLE001
+        return await msg.edit_text(f"❌ Lecture du compte échouée : {esc_md(str(e)[:200])}")
+    lines = [f"🏦 *{acc['status']}*",
+             f"💵 Cash : *{acc['cash']:.2f} {acc['currency']}*",
+             f"📦 Investi : {acc.get('invested', 0):.2f} {acc['currency']}",
+             f"📊 Total : *{acc['equity']:.2f} {acc['currency']}*"]
+    if pos:
+        lines.append("\n*Positions (ISIN · quantité · prix de revient)*")
+        for p in pos:
+            lines.append(f"• `{p['symbol']}` — {p['qty']:g} @ {p['avg_entry_price']:.2f}")
+    else:
+        lines.append("\nAucune position lue (ou compte vide).")
+    lines.append("\n_Lecture seule — tu passes les ordres dans l'app TR._")
+    await msg.edit_text("\n".join(lines), parse_mode=MD)
 
 
 async def broker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1769,6 +1856,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["config", "configuration"], config_cmd))
     app.add_handler(CommandHandler("set", set_cmd))
     app.add_handler(CommandHandler(["del", "supprimer"], del_cmd))
+    app.add_handler(CommandHandler(["traderepublic", "tr"], traderepublic_cmd))
+    app.add_handler(CommandHandler("tr_code", tr_code_cmd))
     app.add_handler(CommandHandler(["broker", "exchange", "echange"], broker_cmd))
     app.add_handler(CommandHandler(["export", "config"], export_cmd))
     app.add_handler(CommandHandler(["sauvegarde", "backup"], sauvegarde_cmd))

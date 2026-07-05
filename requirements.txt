@@ -31,3 +31,6 @@ plotly
 
 # --- Tableau de bord (optionnel) ---
 streamlit
+
+# --- Optionnel : lecture du compte Trade Republic (API non officielle) ---
+pytr
