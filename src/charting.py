@@ -45,7 +45,7 @@ def make_chart(symbol: str, df, lookback: int = 180) -> str | None:
         ax_vol = axes[1]
         vols = d["volume"].astype(float)
         colors = ["#2ca02c" if c >= o else "#d62728"
-                  for c, o in zip(d["close"], d.get("open", d["close"]))]
+                  for c, o in zip(d["close"], d.get("open", d["close"]), strict=False)]
         ax_vol.bar(vols.index, vols, color=colors, alpha=0.5, width=1.0)
         ax_vol.set_ylabel("Vol.", fontsize=8)
         ax_vol.grid(alpha=0.2)

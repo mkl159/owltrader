@@ -1084,12 +1084,16 @@ async def _ia_sim_comment(chat_id, context, r):
         return await context.bot.send_message(
             chat_id, "🧠 Avis IA sur la simulation : quota du jour déjà utilisé (1/jour).")
     try:
-        ctx = (f"RÉSULTATS DE SIMULATION (backtest {r.equity_curve.index[0].date()} → "
+        cfgp = _paper_cfg()
+        ctx = (f"MODE: SIMULATEUR (backtest paper-trading). "
+               f"COÛTS: {cfgp.get('frais_pct', 0.2)}% par ordre (min {cfgp.get('frais_min', 1.0):.2f}), "
+               f"achat ET vente.\n"
+               f"RÉSULTATS DE SIMULATION (backtest {r.equity_curve.index[0].date()} → "
                f"{r.equity_curve.index[-1].date()}), capital {r.capital:.0f} → {r.final_equity:.2f} : "
                f"rendement {r.total_return*100:+.1f}%, CAGR {r.cagr*100:+.1f}%, Sharpe {r.sharpe}, "
                f"Sortino {r.sortino}, drawdown max {r.max_drawdown*100:.1f}%, "
                f"{r.n_trades} trades, réussite {r.win_rate*100:.0f}%, "
-               f"profit factor {r.profit_factor}, frais {r.fees_total:.0f}.")
+               f"profit factor {r.profit_factor}, frais totaux payés {r.fees_total:.0f}.")
         advice = await asyncio.to_thread(
             ai.ask, ctx, "Analyse ces résultats de backtest : forces, faiblesses, et 2-3 pistes "
                          "concrètes pour améliorer le rendement (profil agressif).")

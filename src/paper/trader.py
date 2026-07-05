@@ -181,10 +181,12 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
                          "fee": fee, "pnl": pnl, "motif": "ordre IA"})
         del held[asset]
 
-    # 2) ACHATS
-    equity_now = cash + sum(
-        held[a]["quantity"] * (svc.quote(a).price if svc.quote(a) else held[a]["entry_price"])
-        for a in held)
+    # 2) ACHATS (une seule cotation par actif détenu)
+    equity_now = cash
+    for a, p in held.items():
+        q = svc.quote(a)
+        price = q.price if (q and q.price == q.price) else p["entry_price"]
+        equity_now += p["quantity"] * price
     for o in [o for o in orders if o["action"] == "BUY"]:
         asset = Asset.parse(o["asset"]).raw
         if asset in held or asset not in known or len(held) >= max_pos:

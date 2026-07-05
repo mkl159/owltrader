@@ -13,7 +13,7 @@ POSITIVE = {
     "surge", "soar", "rally", "gain", "gains", "rise", "rises", "jump", "beat", "beats",
     "record", "growth", "profit", "profits", "upgrade", "bullish", "outperform", "strong",
     "boost", "high", "wins", "win", "positive", "recovery", "rebound", "buy",
-    "hausse", "bond", "record", "croissance", "bénéfice", "bénéfices", "gagne", "hausses",
+    "hausse", "bond", "croissance", "bénéfice", "bénéfices", "gagne", "hausses",
 }
 NEGATIVE = {
     "plunge", "crash", "fall", "falls", "drop", "drops", "slump", "loss", "losses", "miss",

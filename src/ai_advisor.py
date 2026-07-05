@@ -75,14 +75,35 @@ def record_call(db):
 
 def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
     """Agrège tout le contexte utile en un texte compact pour le modèle."""
+    from .config import CONFIG
     from .paper import trader
     parts: list[str] = []
+
+    # Mode d'exécution + COÛTS de transaction (l'IA doit raisonner frais inclus)
+    pc = CONFIG.get("paper", {})
+    fee_pct = pc.get("frais_pct", 0.20)
+    fee_min = pc.get("frais_min", 1.0)
+    dev = pc.get("devise", "EUR")
+    parts.append(
+        "MODE D'EXÉCUTION: SIMULATEUR paper-trading interne (argent fictif). "
+        "Tes ordres BUY/SELL y seront exécutés automatiquement si l'utilisateur l'a activé."
+    )
+    parts.append(
+        f"COÛTS DE TRANSACTION: {fee_pct}% par ordre avec minimum {fee_min:.2f} {dev}, "
+        f"payés à l'ACHAT ET à la VENTE (aller-retour ≈ {2*fee_pct}% ou 2x{fee_min:.2f} {dev} minimum). "
+        "Un aller-retour n'est rentable que si le gain attendu dépasse ces frais : évite le sur-trading."
+    )
+    parts.append(
+        f"RÈGLES DE DIMENSIONNEMENT: max {pc.get('max_positions', 5)} positions simultanées, "
+        f"≈{pc.get('alloc_pct', 20)}% du capital par position (ajusté volatilité), "
+        f"stop-loss automatique du bot à -{pc.get('stop_loss_pct', 25)}%."
+    )
 
     # Positions & compte
     acc, equity, holdings = trader.account_state(db, svc, chat_id)
     if acc:
         parts.append(f"COMPTE (fictif): total {equity:.2f} {acc.get('devise','EUR')}, "
-                     f"cash {acc['cash']:.2f}, capital initial {acc['capital']:.0f}")
+                     f"cash disponible {acc['cash']:.2f}, capital initial {acc['capital']:.0f}")
     if holdings:
         parts.append("POSITIONS:")
         for h in holdings:
@@ -179,11 +200,10 @@ def parse_orders(text: str) -> tuple[str, list[dict]]:
     """
     import json
     import re
-    m = None
-    for m in re.finditer(r'\{\s*"orders"\s*:\s*\[.*?\]\s*\}', text, re.S):
-        pass  # garde la DERNIÈRE occurrence (le bloc final)
-    if not m:
+    matches = list(re.finditer(r'\{\s*"orders"\s*:\s*\[.*?\]\s*\}', text, re.S))
+    if not matches:
         return text.strip(), []
+    m = matches[-1]  # garde la DERNIÈRE occurrence (le bloc final)
     try:
         data = json.loads(m.group(0))
         orders = []

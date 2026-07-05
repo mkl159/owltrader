@@ -18,8 +18,7 @@ GEO_KEYWORDS = {
     "tariffs", "missile", "strike", "attack", "nuclear", "tension", "tensions", "crisis",
     "embargo", "ceasefire", "military", "troops", "escalation", "coup", "terror",
     # FR
-    "guerre", "conflit", "invasion", "sanction", "sanctions", "tarifs", "missile",
-    "attaque", "nucléaire", "tension", "tensions", "crise", "embargo", "militaire",
+    "guerre", "conflit", "tarifs", "attaque", "nucléaire", "crise", "militaire",
     "escalade", "frappe", "frappes",
 }
 _WORD = re.compile(r"[a-zàâäéèêëîïôöùûüç]+", re.IGNORECASE)
