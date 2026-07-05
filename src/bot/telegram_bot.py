@@ -633,17 +633,25 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --------------------------------------------------------------------------- #
 #  Conseiller IA (OpenAI) — facultatif, 1 requête/jour max
 # --------------------------------------------------------------------------- #
+def _ia_mode_live(db) -> str:
+    """Mode trading : 'ia' si le conseiller participe, sinon 'solo'."""
+    return "ia" if db.get_config("AI_ENABLED") == "1" else "solo"
+
+
+def _ia_mode_sim(db) -> str:
+    return "ia" if db.get_config("AI_SIM_ENABLED") == "1" else "solo"
+
+
 def _ia_keyboard(db) -> InlineKeyboardMarkup:
-    live_on = db.get_config("AI_ENABLED") == "1"
-    sim_on = db.get_config("AI_SIM_ENABLED") == "1"
-    exec_on = db.get_config("AI_EXEC_ENABLED") == "1"
+    live = _ia_mode_live(db)
+    simm = _ia_mode_sim(db)
+    def mark(cur, val, label):
+        return ("✅ " if cur == val else "") + label
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton(("🟢 Conseil quotidien : ON" if live_on else "⚪ Conseil quotidien : OFF"),
-                              callback_data="ia:toggle_live")],
-        [InlineKeyboardButton(("🟢 Exécution auto des ordres : ON" if exec_on else "⚪ Exécution auto des ordres : OFF"),
-                              callback_data="ia:toggle_exec")],
-        [InlineKeyboardButton(("🟢 Avis IA sur /simuler : ON" if sim_on else "⚪ Avis IA sur /simuler : OFF"),
-                              callback_data="ia:toggle_sim")],
+        [InlineKeyboardButton(mark(live, "solo", "⚙️ Autonome seul"), callback_data="ia:live:solo"),
+         InlineKeyboardButton(mark(live, "ia", "🧠 Autonome + IA"), callback_data="ia:live:ia")],
+        [InlineKeyboardButton(mark(simm, "solo", "⚙️ Simulation seule"), callback_data="ia:sim:solo"),
+         InlineKeyboardButton(mark(simm, "ia", "🧠 Simulation + IA"), callback_data="ia:sim:ia")],
         [InlineKeyboardButton("💬 Demander un avis maintenant", callback_data="ia:ask")],
         [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
     ])
@@ -654,17 +662,22 @@ def _ia_status_text(db) -> str:
     ok = ai.is_configured()
     quota = "✅ disponible aujourd'hui" if ai.can_call(db) else "⏳ déjà utilisée aujourd'hui (1/jour)"
     model = (db.get_config("OPENAI_MODEL") or ai.DEFAULT_MODEL)
+    live = _ia_mode_live(db)
+    simm = _ia_mode_sim(db)
+    live_txt = ("🧠 *Autonome + IA* — le bot trade sa stratégie ET applique chaque jour les "
+                "ordres du conseiller IA (12h45 New York, en pleine séance)"
+                if live == "ia" else
+                "⚙️ *Autonome seul* — stratégie du bot uniquement, AUCUN appel à OpenAI")
+    sim_txt = ("🧠 *Simulation + IA* — /simuler ajoute l'avis du conseiller sur les résultats"
+               if simm == "ia" else
+               "⚙️ *Simulation seule* — /simuler sans appel à OpenAI")
     return (
         "🧠 *Conseiller IA (OpenAI)* — facultatif\n\n"
-        f"Clé configurée : {'✅' if ok else '❌ (utilise /set OPENAI_API_KEY ta-clé)'}\n"
-        f"Modèle : `{model}` · Requête du jour : {quota}\n\n"
-        "Il agrège TOUT (positions, signaux, marché, risque, actus RSS) et donne des *ordres "
-        "court terme tranchés* : ACHETER / VENDRE / RENFORCER + stops et objectifs.\n"
-        "🤖 *Exécution auto* : si activée, le bot APPLIQUE les ordres IA sur le compte "
-        "fictif (achats/ventes réels du paper-trading, frais inclus, loggués).\n"
+        f"Clé : {'✅' if ok else '❌ (/set OPENAI_API_KEY ta-clé)'} · Modèle : `{model}`\n"
+        f"Requête du jour : {quota}\n\n"
+        f"🤖 Mode trading : {live_txt}\n\n"
+        f"🧪 Mode simulateur : {sim_txt}\n\n"
         "Limites : 1 requête/jour · pas d'appel sans position ni bourse fermée.\n"
-        "🕐 Conseil quotidien envoyé *en pleine séance* : 12h45 heure de New York "
-        "(≈18h45 Paris), quand le marché US est actif.\n\n"
         "_⚠️ Avis d'IA, pas un conseil financier. Trading 100% fictif._"
     )
 
@@ -1393,16 +1406,21 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎚️ Agressivité réglée sur *{name}*.", parse_mode=MD,
             reply_markup=back_button("auto_menu"))
     if data.startswith("ia:"):
-        action = data.split(":", 1)[1]
-        if action == "toggle_live":
-            cur = db.get_config("AI_ENABLED") == "1"
-            db.set_config("AI_ENABLED", "0" if cur else "1")
-        elif action == "toggle_exec":
-            cur = db.get_config("AI_EXEC_ENABLED") == "1"
-            db.set_config("AI_EXEC_ENABLED", "0" if cur else "1")
-        elif action == "toggle_sim":
-            cur = db.get_config("AI_SIM_ENABLED") == "1"
-            db.set_config("AI_SIM_ENABLED", "0" if cur else "1")
+        parts_cb = data.split(":")
+        action = parts_cb[1]
+        if action == "live":
+            # Mode trading : "solo" = autonome seul (zéro appel IA) ; "ia" = autonome + IA
+            # (conseil quotidien ET exécution des ordres, d'un seul geste)
+            on = parts_cb[2] == "ia"
+            db.set_config("AI_ENABLED", "1" if on else "0")
+            db.set_config("AI_EXEC_ENABLED", "1" if on else "0")
+        elif action == "sim":
+            db.set_config("AI_SIM_ENABLED", "1" if parts_cb[2] == "ia" else "0")
+        elif action in ("toggle_live", "toggle_exec", "toggle_sim"):
+            # rétro-compat : anciens boutons encore affichés dans de vieux messages
+            key = {"toggle_live": "AI_ENABLED", "toggle_exec": "AI_EXEC_ENABLED",
+                   "toggle_sim": "AI_SIM_ENABLED"}[action]
+            db.set_config(key, "0" if db.get_config(key) == "1" else "1")
         elif action == "ask":
             await q.edit_message_text("🧠 Demande en cours…")
             return await _ia_ask_and_send(chat_id, context, source="manuel")
