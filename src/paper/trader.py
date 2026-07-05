@@ -140,6 +140,80 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     return executed
 
 
+def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
+                   universe: list[str]) -> list[dict]:
+    """Exécute les ordres du conseiller IA sur le compte fictif (frais inclus).
+
+    Garde-fous : actifs connus uniquement (univers ou positions), respect du cash,
+    du nombre max de positions et des frais — comme le mode autonome.
+    """
+    from ..symbols import Asset
+    acc = db.paper_get(chat_id)
+    if not acc or not acc.get("active") or not orders:
+        return []
+    fee_pct = paper_cfg.get("frais_pct", 0.20)
+    fee_min = paper_cfg.get("frais_min", 1.0)
+    max_pos = int(paper_cfg.get("max_positions", 5))
+    alloc = paper_cfg.get("alloc_pct", 20)
+
+    cash = acc["cash"]
+    held = {p["asset"]: p for p in db.paper_positions(chat_id)}
+    known = set(universe) | set(held)
+    executed: list[dict] = []
+
+    # 1) VENTES d'abord (libèrent du cash pour les achats)
+    for o in [o for o in orders if o["action"] == "SELL"]:
+        asset = Asset.parse(o["asset"]).raw
+        p = held.get(asset)
+        if not p:
+            continue
+        q = svc.quote(asset)
+        if q is None or not (q.price == q.price) or q.price <= 0:
+            continue
+        qty, price = p["quantity"], q.price
+        gross = qty * price
+        fee = courtage(gross, fee_pct, fee_min)
+        cash += gross - fee
+        pnl = (price - p["entry_price"]) * qty - fee - p["entry_fee"]
+        db.paper_remove_position(chat_id, asset)
+        db.paper_record_trade(chat_id, asset, "VENTE", qty, price, fee, pnl)
+        executed.append({"side": "VENTE", "asset": asset, "quantity": qty, "price": price,
+                         "fee": fee, "pnl": pnl, "motif": "ordre IA"})
+        del held[asset]
+
+    # 2) ACHATS
+    equity_now = cash + sum(
+        held[a]["quantity"] * (svc.quote(a).price if svc.quote(a) else held[a]["entry_price"])
+        for a in held)
+    for o in [o for o in orders if o["action"] == "BUY"]:
+        asset = Asset.parse(o["asset"]).raw
+        if asset in held or asset not in known or len(held) >= max_pos:
+            continue
+        q = svc.quote(asset)
+        if q is None or not (q.price == q.price) or q.price <= 0:
+            continue
+        target = min(equity_now * alloc / 100.0, cash - fee_min)
+        if target < 10:
+            continue
+        price = q.price
+        gross = target / (1 + fee_pct / 100.0)
+        fee = courtage(gross, fee_pct, fee_min)
+        if gross + fee > cash:
+            gross = cash - fee
+        if gross < 10:
+            continue
+        qty = gross / price
+        cash -= gross + fee
+        db.paper_add_position(chat_id, asset, qty, price, fee)
+        db.paper_record_trade(chat_id, asset, "ACHAT", qty, price, fee, 0.0)
+        executed.append({"side": "ACHAT", "asset": asset, "quantity": qty, "price": price,
+                         "fee": fee, "pnl": 0.0, "motif": "ordre IA"})
+        held[asset] = {"quantity": qty, "entry_price": price, "entry_fee": fee}
+
+    db.paper_set_cash(chat_id, cash)
+    return executed
+
+
 def account_state(db, svc, chat_id: int):
     """Renvoie (compte, équity courante, positions valorisées)."""
     acc = db.paper_get(chat_id)

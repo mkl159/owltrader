@@ -38,7 +38,12 @@ SYSTEM_PROMPT = (
     "3) ⚡ STRATÉGIE DU JOUR — 2 phrases max, agressives et concrètes.\n"
     "Sois tranché : évite les « peut-être ». Si le contexte est mauvais, dis clairement "
     "VENDRE ou RESTER LIQUIDE.\n"
-    "Termine par : « ⚠️ Avis IA, pas un conseil financier. »"
+    "Termine par : « ⚠️ Avis IA, pas un conseil financier. »\n"
+    "PUIS, tout à la fin, ajoute un bloc JSON STRICT sur une seule ligne, au format exact :\n"
+    '{"orders":[{"action":"BUY","asset":"STOCK:AAPL"},{"action":"SELL","asset":"CRYPTO:BTC"}]}\n'
+    "Règles du JSON : uniquement les ordres à exécuter MAINTENANT (BUY/SELL), en utilisant "
+    "exactement les identifiants d'actifs fournis dans le contexte (ex. STOCK:AAPL). "
+    'Liste vide {"orders":[]} si aucun ordre.'
 )
 
 
@@ -164,6 +169,34 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
         pass
 
     return "\n".join(parts) if parts else "Aucun contexte disponible."
+
+
+def parse_orders(text: str) -> tuple[str, list[dict]]:
+    """Extrait le bloc JSON d'ordres de la réponse IA.
+
+    Renvoie (texte_sans_le_json, [{"action": "BUY"/"SELL", "asset": "STOCK:AAPL"}, ...]).
+    Tolérant : si pas de JSON valide, renvoie le texte tel quel et une liste vide.
+    """
+    import json
+    import re
+    m = None
+    for m in re.finditer(r'\{\s*"orders"\s*:\s*\[.*?\]\s*\}', text, re.S):
+        pass  # garde la DERNIÈRE occurrence (le bloc final)
+    if not m:
+        return text.strip(), []
+    try:
+        data = json.loads(m.group(0))
+        orders = []
+        for o in data.get("orders", []):
+            action = str(o.get("action", "")).upper()
+            asset = str(o.get("asset", "")).upper().strip()
+            if action in ("BUY", "SELL") and ":" in asset:
+                orders.append({"action": action, "asset": asset})
+        clean = (text[:m.start()] + text[m.end():]).strip()
+        clean = clean.replace("```json", "").replace("```", "").strip()
+        return clean, orders
+    except Exception:  # noqa: BLE001
+        return text.strip(), []
 
 
 def ask(context_text: str, question: str | None = None) -> str:

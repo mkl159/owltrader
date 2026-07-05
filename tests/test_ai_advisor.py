@@ -59,3 +59,43 @@ def test_ask_appel_mocke():
 def test_max_tokens_invalide_retombe_sur_defaut():
     with patch("src.ai_advisor.get_secret", return_value="pas-un-nombre"):
         assert ai._max_tokens() == ai.DEFAULT_MAX_TOKENS
+
+
+def test_parse_orders():
+    txt = ('1) ACHETER AAPL...\n⚠️ Avis IA.\n'
+           '{"orders":[{"action":"BUY","asset":"STOCK:AAPL"},{"action":"SELL","asset":"CRYPTO:BTC"}]}')
+    clean, orders = ai.parse_orders(txt)
+    assert "orders" not in clean            # JSON retiré du texte affiché
+    assert orders == [{"action": "BUY", "asset": "STOCK:AAPL"},
+                      {"action": "SELL", "asset": "CRYPTO:BTC"}]
+
+
+def test_parse_orders_sans_json():
+    clean, orders = ai.parse_orders("Aucun ordre aujourd'hui.")
+    assert orders == [] and "Aucun ordre" in clean
+
+
+def test_parse_orders_json_invalide():
+    clean, orders = ai.parse_orders('bla {"orders": [pas du json]} bla')
+    assert orders == []
+
+
+def test_execute_orders_paper():
+    from src.paper import trader
+    db = _db()
+    db.paper_open(1, 1000, "EUR")
+    svc = MagicMock()
+    quote = MagicMock(); quote.price = 100.0
+    svc.quote.return_value = quote
+    cfg = {"frais_pct": 0.2, "frais_min": 1.0, "max_positions": 5, "alloc_pct": 20, "devise": "EUR"}
+    uni = ["STOCK:AAPL", "CRYPTO:BTC"]
+    ex = trader.execute_orders(db, svc, 1, [{"action": "BUY", "asset": "STOCK:AAPL"}], cfg, uni)
+    assert len(ex) == 1 and ex[0]["side"] == "ACHAT" and ex[0]["motif"] == "ordre IA"
+    assert db.paper_positions(1)[0]["asset"] == "STOCK:AAPL"
+    # vente de la position par ordre IA
+    ex2 = trader.execute_orders(db, svc, 1, [{"action": "SELL", "asset": "STOCK:AAPL"}], cfg, uni)
+    assert len(ex2) == 1 and ex2[0]["side"] == "VENTE"
+    assert db.paper_positions(1) == []
+    # actif inconnu -> ignoré
+    ex3 = trader.execute_orders(db, svc, 1, [{"action": "BUY", "asset": "STOCK:INCONNU"}], cfg, uni)
+    assert ex3 == []

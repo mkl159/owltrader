@@ -636,9 +636,12 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def _ia_keyboard(db) -> InlineKeyboardMarkup:
     live_on = db.get_config("AI_ENABLED") == "1"
     sim_on = db.get_config("AI_SIM_ENABLED") == "1"
+    exec_on = db.get_config("AI_EXEC_ENABLED") == "1"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(("🟢 Conseil quotidien : ON" if live_on else "⚪ Conseil quotidien : OFF"),
                               callback_data="ia:toggle_live")],
+        [InlineKeyboardButton(("🟢 Exécution auto des ordres : ON" if exec_on else "⚪ Exécution auto des ordres : OFF"),
+                              callback_data="ia:toggle_exec")],
         [InlineKeyboardButton(("🟢 Avis IA sur /simuler : ON" if sim_on else "⚪ Avis IA sur /simuler : OFF"),
                               callback_data="ia:toggle_sim")],
         [InlineKeyboardButton("💬 Demander un avis maintenant", callback_data="ia:ask")],
@@ -655,10 +658,12 @@ def _ia_status_text(db) -> str:
         "🧠 *Conseiller IA (OpenAI)* — facultatif\n\n"
         f"Clé configurée : {'✅' if ok else '❌ (utilise /set OPENAI_API_KEY ta-clé)'}\n"
         f"Modèle : `{model}` · Requête du jour : {quota}\n\n"
-        "Il agrège TOUT (positions, signaux, marché, risque, actus RSS) et donne un avis "
-        "*agressif orienté gains* : renforcer / vendre / garder + opportunités.\n"
-        "Limites : 1 requête/jour · pas d'appel sans position en cours.\n\n"
-        "_⚠️ Avis d'IA, pas un conseil financier. Les autres analyses du bot restent actives._"
+        "Il agrège TOUT (positions, signaux, marché, risque, actus RSS) et donne des *ordres "
+        "court terme tranchés* : ACHETER / VENDRE / RENFORCER + stops et objectifs.\n"
+        "🤖 *Exécution auto* : si activée, le bot APPLIQUE les ordres IA sur le compte "
+        "fictif (achats/ventes réels du paper-trading, frais inclus, loggués).\n"
+        "Limites : 1 requête/jour · pas d'appel sans position ni bourse fermée.\n\n"
+        "_⚠️ Avis d'IA, pas un conseil financier. Trading 100% fictif._"
     )
 
 
@@ -687,10 +692,41 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
     msg = await context.bot.send_message(chat_id, "🧠 J'agrège le contexte et j'interroge l'IA…")
     try:
         ctx_text = await asyncio.to_thread(ai.build_context, svc, db, chat_id, _universe())
-        advice = await asyncio.to_thread(ai.ask, ctx_text)
+        raw_advice = await asyncio.to_thread(ai.ask, ctx_text)
         ai.record_call(db)
         db.log_event(chat_id, "ai_call", f"source={source}")
-        await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3800]}", parse_mode=MD)
+        advice, orders = ai.parse_orders(raw_advice)
+        await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3700]}", parse_mode=MD)
+
+        # 🤖 Exécution automatique des ordres IA (si activée)
+        if orders and db.get_config("AI_EXEC_ENABLED") == "1":
+            executed = await asyncio.to_thread(
+                trader.execute_orders, db, svc, chat_id, orders, _paper_cfg(), _universe())
+            dev = _paper_cfg().get("devise", "EUR")
+            if executed:
+                for tr in executed:
+                    await context.bot.send_message(
+                        chat_id,
+                        trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
+                                  tr.get("pnl") if tr["side"] == "VENTE" else None, dev) +
+                        "\n🧠 _ordre du conseiller IA_",
+                        parse_mode=MD)
+                    db.log_event(chat_id, "ai_exec", f"{tr['side']} {tr['asset']}")
+                acc2, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+                invested = sum(h["value"] for h in holdings)
+                await context.bot.send_message(
+                    chat_id, state_recap(acc2["cash"], invested, len(holdings), equity,
+                                         acc2["capital"], dev), parse_mode=MD)
+            else:
+                await context.bot.send_message(
+                    chat_id, "🤖 Ordres IA reçus mais non exécutables (actif inconnu, cash ou "
+                             "limites) — aucun trade passé.")
+        elif orders:
+            noms = ", ".join(f"{o['action']} {o['asset']}" for o in orders)
+            await context.bot.send_message(
+                chat_id, f"💡 Ordres suggérés (exécution auto désactivée) : {noms}\n"
+                         "_Active-la dans /ia pour que je les applique automatiquement._",
+                parse_mode=MD)
     except Exception as e:  # noqa: BLE001
         await msg.edit_text(f"❌ Échec de l'appel IA : {esc_md(str(e)[:200])}")
 
@@ -1355,6 +1391,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "toggle_live":
             cur = db.get_config("AI_ENABLED") == "1"
             db.set_config("AI_ENABLED", "0" if cur else "1")
+        elif action == "toggle_exec":
+            cur = db.get_config("AI_EXEC_ENABLED") == "1"
+            db.set_config("AI_EXEC_ENABLED", "0" if cur else "1")
         elif action == "toggle_sim":
             cur = db.get_config("AI_SIM_ENABLED") == "1"
             db.set_config("AI_SIM_ENABLED", "0" if cur else "1")
