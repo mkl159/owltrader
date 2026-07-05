@@ -24,14 +24,20 @@ DEFAULT_MODEL = "gpt-5.4-mini"
 DEFAULT_MAX_TOKENS = 100_000
 
 SYSTEM_PROMPT = (
-    "Tu es un conseiller de trading expérimenté au profil AGRESSIF : ton objectif est de "
-    "maximiser les gains de l'utilisateur, tout en signalant les risques majeurs. "
-    "On te fournit un contexte complet : positions actuelles, signaux techniques, tendance "
-    "de marché, climat de risque et titres d'actualité. Réponds en FRANÇAIS, de façon "
-    "concise et actionnable :\n"
-    "1) Pour CHAQUE position : RENFORCER / VENDRE / GARDER, avec une raison courte.\n"
-    "2) Top 2-3 opportunités d'achat si le contexte s'y prête.\n"
-    "3) Un conseil global agressif du jour (1-2 phrases).\n"
+    "Tu es un trader professionnel AGRESSIF spécialisé dans le RENDEMENT COURT TERME "
+    "(horizon quelques jours à quelques semaines). Objectif : maximiser les gains rapides "
+    "de l'utilisateur en exploitant momentum, cassures et actualités — tout en donnant un "
+    "stop pour chaque idée. On te fournit le dossier complet du bot : positions et leurs "
+    "indicateurs, meilleurs candidats du scan, régime de marché, risque, saisonnalité, "
+    "plus forts mouvements du jour et titres d'actualité.\n"
+    "Réponds en FRANÇAIS, format strict et actionnable :\n"
+    "1) 📌 ORDRES DU JOUR — liste numérotée : ACHETER X / VENDRE X / RENFORCER X / GARDER X. "
+    "Pour chaque ordre : raison courte (1 ligne) + niveau de stop conseillé + objectif court terme.\n"
+    "2) 🚀 MEILLEUR COUP COURT TERME — LA meilleure opportunité de gain rapide du moment, "
+    "avec entrée/stop/objectif chiffrés.\n"
+    "3) ⚡ STRATÉGIE DU JOUR — 2 phrases max, agressives et concrètes.\n"
+    "Sois tranché : évite les « peut-être ». Si le contexte est mauvais, dis clairement "
+    "VENDRE ou RESTER LIQUIDE.\n"
     "Termine par : « ⚠️ Avis IA, pas un conseil financier. »"
 )
 
@@ -78,17 +84,50 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
             pnl = f" ({h['pnl_pct']:+.1f}%)" if h.get("pnl_pct") is not None else ""
             parts.append(f"- {h['asset']}: {h['value']:.2f}{pnl}")
 
-    # Signaux sur les positions
+    # Détail technique de CHAQUE position (indicateurs complets du bot)
     try:
-        for h in holdings[:6]:
+        for h in holdings[:8]:
             a = svc.analyze(h["asset"], with_news=False)
+            ind = a.indicators or {}
+            det = []
             if a.signal:
-                parts.append(f"SIGNAL {h['asset']}: {a.signal.direction.value} "
-                             f"(force {a.signal.score:.0f}) — {a.signal.reason}")
+                det.append(f"signal {a.signal.direction.value} force {a.signal.score:.0f} ({a.signal.reason})")
+            if ind.get("rsi") is not None:
+                det.append(f"RSI {ind['rsi']:.0f}")
+            if ind.get("close") and ind.get("sma50"):
+                det.append(f"cours {'>' if ind['close']>ind['sma50'] else '<'} SMA50")
+            if ind.get("macd_hist") is not None:
+                det.append(f"MACD {'haussier' if ind['macd_hist']>0 else 'baissier'}")
+            if ind.get("atr") and ind.get("close"):
+                det.append(f"ATR {ind['atr']:.2f} (stop 2xATR ≈ {ind['close']-2*ind['atr']:.2f})")
+            parts.append(f"TECHNIQUE {h['asset']}: " + " | ".join(det))
     except Exception:  # noqa: BLE001
         pass
 
-    # Marché global + risque + saison
+    # Meilleurs candidats du scan (pistes d'achat du bot, classées)
+    try:
+        top = svc.scan(universe, top=5)
+        if top:
+            parts.append("MEILLEURS CANDIDATS DU SCAN (bot):")
+            for s in top:
+                extra = ""
+                if s.stop_loss:
+                    extra = f" | stop≈{s.stop_loss:.2f} objectif≈{s.take_profit:.2f}"
+                parts.append(f"- {s.symbol}: {s.direction.value} force {s.score:.0f} ({s.reason}){extra}")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Plus forts mouvements du jour (momentum court terme)
+    try:
+        movers = svc.movers(universe)
+        if movers:
+            gain = ", ".join(f"{a} {q.change_pct:+.1f}%" for a, q in movers[:3])
+            lose = ", ".join(f"{a} {q.change_pct:+.1f}%" for a, q in movers[-3:])
+            parts.append(f"MOVERS JOUR: hausses [{gain}] | baisses [{lose}]")
+    except Exception:  # noqa: BLE001
+        pass
+
+    # Marché global + régime + risque + saison
     try:
         m = svc.market_trend(universe)
         if m:
@@ -96,8 +135,20 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
     except Exception:  # noqa: BLE001
         pass
     try:
+        from .regime import market_ok_now
+        mkt = svc.history("INDEX:^GSPC", period="1y")
+        parts.append(f"RÉGIME: {'FAVORABLE (achats permis)' if market_ok_now(mkt) else 'DÉFAVORABLE (S&P<MM200)'}")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         rc = svc.risk_climate()
         parts.append(f"RISQUE: {rc.label} | {rc.vix_note} | tension géo {rc.geo_score*100:.0f}%")
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        s, _, nh = svc.season()
+        hol = f", prochain férié {nh[1]} dans {nh[0]}j" if nh else ""
+        parts.append(f"SAISON: biais {s.bias:+.2f}{hol}")
     except Exception:  # noqa: BLE001
         pass
 
