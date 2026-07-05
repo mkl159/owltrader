@@ -223,6 +223,75 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
     return executed
 
 
+def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: dict) -> list[dict]:
+    """Applique la stratégie du bot sur un VRAI broker (Alpaca) : achète/vend en autonome.
+
+    Mêmes règles que le mode autonome interne (tendance + régime déjà dans la décision),
+    mais l'exécution passe par l'API du broker. Fonctionne sur compte paper (gratuit) ou live.
+    """
+    from ..brokers.alpaca import to_alpaca_symbol
+    from ..strategy import should_hold
+    max_pos = int(paper_cfg.get("max_positions", 5))
+    alloc = paper_cfg.get("alloc_pct", 20)
+    sp = {k: params[k] for k in ("short", "long", "rsi_entry_max", "rsi_exit") if k in params}
+
+    acc = broker.get_account()
+    equity = acc.get("equity", 0.0)
+    cash = acc.get("cash", 0.0)
+    positions = {p["symbol"]: p for p in broker.get_positions()}
+
+    # Décisions par actif (uniquement ceux tradables chez le broker)
+    wants: dict[str, str] = {}      # symbole broker -> actif interne
+    for raw in universe:
+        sym = to_alpaca_symbol(raw)
+        if not sym:
+            continue
+        df = svc.history(raw, period="1y")
+        if df is None:
+            continue
+        try:
+            if should_hold(df, **sp):
+                wants[sym] = raw
+        except Exception:  # noqa: BLE001
+            continue
+
+    executed: list[dict] = []
+    # VENTES : positions détenues que la stratégie ne veut plus
+    for sym, p in positions.items():
+        if sym not in wants:
+            try:
+                broker.submit_order(sym, abs(p["qty"]), "sell")
+                executed.append({"side": "VENTE", "asset": sym, "quantity": p["qty"],
+                                 "price": p.get("avg_entry_price", 0), "fee": 0.0,
+                                 "pnl": 0.0, "motif": "broker"})
+            except Exception as e:  # noqa: BLE001
+                log.warning("Alpaca vente %s : %s", sym, e)
+
+    # ACHATS : ce que la stratégie veut et qu'on ne détient pas
+    free = max_pos - len(positions)
+    for sym, raw in wants.items():
+        if free <= 0 or cash < 5:
+            break
+        if sym in positions:
+            continue
+        q = svc.quote(raw)
+        if q is None or not (q.price == q.price) or q.price <= 0:
+            continue
+        target = min(equity * alloc / 100.0, cash * 0.98)
+        qty = round(target / q.price, 6)
+        if qty <= 0:
+            continue
+        try:
+            broker.submit_order(sym, qty, "buy")
+            cash -= qty * q.price
+            free -= 1
+            executed.append({"side": "ACHAT", "asset": sym, "quantity": qty,
+                             "price": q.price, "fee": 0.0, "pnl": 0.0, "motif": "broker"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("Alpaca achat %s : %s", sym, e)
+    return executed
+
+
 def account_state(db, svc, chat_id: int):
     """Renvoie (compte, équity courante, positions valorisées)."""
     acc = db.paper_get(chat_id)

@@ -528,7 +528,7 @@ async def alpaca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "*paper trading*, et ajoute dans `.env` :\n"
             "`ALPACA_API_KEY_ID=...`\n`ALPACA_API_SECRET=...`",
             parse_mode=MD)
-    lines = [f"🦙 *Alpaca paper* — compte {acc['status']}",
+    lines = [f"🦙 *Alpaca* — compte {acc['status']}",
              f"💵 Cash : {acc['cash']:.2f} {acc['currency']}",
              f"📊 Équity : *{acc['equity']:.2f} {acc['currency']}*", ""]
     if pos:
@@ -537,7 +537,9 @@ async def alpaca_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"• {p['symbol']} : {p['qty']:g} ({p['unrealized_plpc']:+.1f}%)")
     else:
         lines.append("Aucune position ouverte.")
-    await msg.edit_text("\n".join(lines), parse_mode=MD)
+    await msg.edit_text("\n".join(lines), parse_mode=MD,
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
+                            "🤖 Trading autonome sur Alpaca", callback_data="alpaca_panel")]]))
 
 
 async def equipe(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -891,6 +893,82 @@ async def _tr_show_account(msg, broker):
         lines.append("\nAucune position lue (ou compte vide).")
     lines.append("\n_Lecture seule — tu passes les ordres dans l'app TR._")
     await msg.edit_text("\n".join(lines), parse_mode=MD)
+
+
+def _alpaca_auto_keyboard(db) -> InlineKeyboardMarkup:
+    mode = db.get_config("ALPACA_AUTO") or "off"
+    def mk(v, label):
+        return ("✅ " if mode == v else "") + label
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton(mk("off", "⚪ Désactivé"), callback_data="alp:off")],
+        [InlineKeyboardButton(mk("paper", "🧪 Auto sur Alpaca PAPER (gratuit, sans risque)"),
+                              callback_data="alp:paper")],
+        [InlineKeyboardButton(mk("live", "💸 Auto sur Alpaca RÉEL (vrai argent)"),
+                              callback_data="alp:live")],
+        [InlineKeyboardButton("🔌 Tester la connexion", callback_data="alp:test")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
+    ])
+
+
+def _alpaca_auto_text(db) -> str:
+    mode = db.get_config("ALPACA_AUTO") or "off"
+    from .. import ai_advisor  # noqa: F401 (garde l'ordre d'import cohérent)
+    etat = {"off": "⚪ désactivé", "paper": "🧪 PAPER (faux argent, gratuit)",
+            "live": "💸 RÉEL (vrai argent)"}[mode]
+    return (
+        "🦙 *Trading autonome sur Alpaca*\n\n"
+        f"État actuel : *{etat}*\n\n"
+        "Le bot applique sa stratégie *directement sur ton compte Alpaca* (il passe les "
+        "ordres seul, sans 2FA par ordre) toutes les heures.\n\n"
+        "1️⃣ Crée un compte gratuit sur *alpaca.markets*\n"
+        "2️⃣ Clés : `/set ALPACA_API_KEY_ID …` et `/set ALPACA_API_SECRET …`\n"
+        "3️⃣ Choisis *PAPER* d'abord (faux argent) pour valider sans risque.\n\n"
+        "_💸 Le mode RÉEL engage du vrai argent — la stratégie n'est validée qu'en backtest. "
+        "À n'activer qu'en pleine connaissance de cause._"
+    )
+
+
+async def alpaca_auto_job(context: ContextTypes.DEFAULT_TYPE):
+    """Cycle de trading autonome sur Alpaca (si activé paper/live)."""
+    import json as _json
+    db: Storage = context.application.bot_data["db"]
+    svc: MarketService = context.application.bot_data["svc"]
+    mode = db.get_config("ALPACA_AUTO")
+    if mode not in ("paper", "live"):
+        return
+    try:
+        from ..brokers.alpaca import AlpacaBroker
+        broker = AlpacaBroker(mode=mode)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Alpaca auto : connexion impossible (%s)", e)
+        return
+    # paramètres stratégie (auto-tunés) du 1er compte, sinon défauts
+    params = {}
+    for cid in db.paper_active_chats():
+        acc = db.paper_get(cid)
+        if acc and acc.get("params"):
+            params = _json.loads(acc["params"])
+            break
+    try:
+        executed = await asyncio.to_thread(
+            trader.run_broker_cycle, broker, svc, _universe(), _paper_cfg(), params)
+    except Exception as e:  # noqa: BLE001
+        log.warning("Alpaca auto cycle : %s", e)
+        return
+    if not executed:
+        return
+    tag = "PAPER" if mode == "paper" else "RÉEL 💸"
+    for cid in db.all_authorized() or db.paper_active_chats():
+        for tr in executed:
+            ic = "🟢 ACHAT" if tr["side"] == "ACHAT" else "🔴 VENTE"
+            try:
+                await context.bot.send_message(
+                    cid, f"🦙 *Alpaca {tag}* — {ic} {tr['asset']} × {tr['quantity']:g}",
+                    parse_mode=MD)
+            except Exception:  # noqa: BLE001
+                pass
+        db.log_event(cid, "alpaca_exec", f"{mode}: {len(executed)} ordres")
+        break  # une seule notification (compte unique)
 
 
 async def broker_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1499,6 +1577,33 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "ia_panel":
         return await q.edit_message_text(_ia_status_text(db), parse_mode=MD,
                                          reply_markup=_ia_keyboard(db))
+    if data == "alpaca_panel":
+        return await q.edit_message_text(_alpaca_auto_text(db), parse_mode=MD,
+                                         reply_markup=_alpaca_auto_keyboard(db))
+    if data.startswith("alp:"):
+        sub = data.split(":", 1)[1]
+        if sub in ("off", "paper", "live"):
+            db.set_config("ALPACA_AUTO", sub)
+            if sub == "live":
+                await q.answer("⚠️ Mode RÉEL activé — vrai argent !", show_alert=True)
+        elif sub == "test":
+            await q.edit_message_text("🔌 Test de connexion Alpaca…")
+            def _t():
+                from ..brokers.alpaca import AlpacaBroker
+                b = AlpacaBroker(mode=db.get_config("ALPACA_AUTO") or "paper")
+                return b.get_account()
+            try:
+                acc = await asyncio.to_thread(_t)
+                await q.edit_message_text(
+                    f"✅ Connecté — compte {acc['status']}, équity {acc['equity']:.2f} "
+                    f"{acc['currency']}", reply_markup=_alpaca_auto_keyboard(db))
+            except Exception as e:  # noqa: BLE001
+                from ..formatting import esc_md
+                await q.edit_message_text(f"❌ {esc_md(str(e)[:200])}",
+                                          reply_markup=_alpaca_auto_keyboard(db))
+            return
+        return await q.edit_message_text(_alpaca_auto_text(db), parse_mode=MD,
+                                         reply_markup=_alpaca_auto_keyboard(db))
     if data.startswith("ia:"):
         parts_cb = data.split(":")
         action = parts_cb[1]
@@ -1908,4 +2013,6 @@ def build_application() -> Application:
     app.job_queue.run_daily(ia_daily_job,
                             time=dtime(hour=12, minute=45, tzinfo=ZoneInfo("America/New_York")))
     app.job_queue.run_repeating(alerts_job, interval=auto_min * 60, first=60)
+    # Trading autonome sur Alpaca (si activé paper/live) — toutes les heures
+    app.job_queue.run_repeating(alpaca_auto_job, interval=3600, first=150)
     return app

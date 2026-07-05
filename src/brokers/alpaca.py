@@ -13,6 +13,13 @@ from ..symbols import Asset
 from .base import Broker
 
 ALPACA_PAPER = "https://paper-api.alpaca.markets"
+ALPACA_LIVE = "https://api.alpaca.markets"
+
+
+def alpaca_base(mode: str | None = None) -> str:
+    """URL de base selon le mode : 'live' = vrai argent, sinon paper (défaut, gratuit)."""
+    m = (mode or get_secret("ALPACA_MODE") or "paper").lower()
+    return ALPACA_LIVE if m == "live" else ALPACA_PAPER
 
 
 def to_alpaca_symbol(raw: str) -> str | None:
@@ -29,7 +36,8 @@ class AlpacaBroker(Broker):
     name = "alpaca"
 
     def __init__(self, key: str | None = None, secret: str | None = None,
-                 base: str = ALPACA_PAPER, session: requests.Session | None = None):
+                 base: str | None = None, session: requests.Session | None = None,
+                 mode: str | None = None):
         self.key = key or get_secret("ALPACA_API_KEY_ID")
         self.secret = secret or get_secret("ALPACA_API_SECRET")
         if not (self.key and self.secret):
@@ -37,7 +45,8 @@ class AlpacaBroker(Broker):
                 "Clés Alpaca manquantes. Crée un compte gratuit sur alpaca.markets, "
                 "génère des clés *paper* et mets ALPACA_API_KEY_ID / ALPACA_API_SECRET dans .env."
             )
-        self.base = base
+        self.base = base or alpaca_base(mode)
+        self.live = self.base == ALPACA_LIVE
         self.s = session or requests.Session()
         self.s.headers.update({
             "APCA-API-KEY-ID": self.key,

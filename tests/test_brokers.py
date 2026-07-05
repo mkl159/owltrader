@@ -56,3 +56,46 @@ def test_to_ccxt_symbol():
     assert to_ccxt_symbol("CRYPTO:BTC") == "BTC/USDT"
     assert to_ccxt_symbol("CRYPTO:ETH", quote="USD") == "ETH/USD"
     assert to_ccxt_symbol("STOCK:AAPL") is None
+
+
+def test_alpaca_base_mode():
+    from src.brokers.alpaca import ALPACA_LIVE, ALPACA_PAPER, alpaca_base
+    assert alpaca_base("paper") == ALPACA_PAPER
+    assert alpaca_base("live") == ALPACA_LIVE
+    assert alpaca_base(None) == ALPACA_PAPER          # défaut = paper (sûr)
+
+
+def test_run_broker_cycle_buys_and_sells():
+    from unittest.mock import MagicMock
+
+    import numpy as np
+    import pandas as pd
+
+    from src.paper import trader
+    from src.strategy import should_hold
+
+    def series(trend, seed):
+        idx = pd.date_range("2019-01-01", periods=400, freq="D", tz="UTC")
+        rng = np.random.default_rng(seed)
+        close = 100 * np.cumprod(1 + trend + rng.normal(0, 0.01, 400))
+        return pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99,
+                             "close": close, "volume": 1000.0}, index=idx)
+
+    up = series(0.0015, 1)     # tendance haussière (le bot veut détenir)
+    down = series(-0.0015, 2)  # tendance baissière (le bot ne veut pas)
+    assert should_hold(up) and not should_hold(down)   # pré-condition du test
+
+    broker = MagicMock()
+    broker.get_account.return_value = {"equity": 10000, "cash": 5000, "currency": "USD"}
+    broker.get_positions.return_value = [{"symbol": "AAPL", "qty": 10, "avg_entry_price": 100}]
+    svc = MagicMock()
+    svc.history.side_effect = lambda raw, period="1y": {"STOCK:NVDA": up}.get(raw, down)
+    qq = MagicMock(); qq.price = 200.0
+    svc.quote.return_value = qq
+
+    ex = trader.run_broker_cycle(broker, svc, ["STOCK:AAPL", "STOCK:NVDA"],
+                                 {"max_positions": 5, "alloc_pct": 20}, {})
+    sides = {e["asset"]: e["side"] for e in ex}
+    assert broker.submit_order.called
+    assert sides.get("AAPL") == "VENTE"      # AAPL détenue mais baissière -> vendue
+    assert sides.get("NVDA") == "ACHAT"      # NVDA haussière non détenue -> achetée
