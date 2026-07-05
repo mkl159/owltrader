@@ -38,6 +38,7 @@ Une vraie simulation 5 ans du mode autonome : **1000 € → 2211 € (+121 %)**
 - 📊 **Briefing marché en un tap** (`/apercu`) — tendance, régime, risque géopolitique, saisonnalité et top opportunités, en une vue.
 - 📰 **Actus + sentiment** — agrège des flux RSS gratuits et les note.
 - 🔔 **Alertes de prix** et **alertes de vente** sur tes positions.
+- 🧠 **Conseiller IA facultatif (OpenAI)** — agrège positions, signaux, marché & actus RSS, puis demande au modèle un avis agressif acheter/vendre (`/ia`, max 1 requête/jour, ignore les jours de bourse fermée, activable/désactivable, aussi sur les backtests).
 - 🌍 **Bilingue** — français & anglais, bascule à tout moment avec `/langue`.
 - 🔒 **Accès protégé par mot de passe** (1re connexion) — configurable.
 - 🔌 **Connecteurs broker** — Alpaca (paper) + 100+ échanges crypto via CCXT (Binance, Kraken…).

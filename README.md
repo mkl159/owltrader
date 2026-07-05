@@ -38,6 +38,7 @@ A real 5-year simulation of the autonomous mode: **€1000 → €2211 (+121%)**
 - 📊 **One-tap market briefing** (`/apercu`) — trend, regime, geopolitical risk, seasonality and top picks, all in one view.
 - 📰 **News + sentiment** — aggregates free RSS feeds and scores them.
 - 🔔 **Price alerts** and **sell alerts** on your holdings.
+- 🧠 **Optional AI advisor (OpenAI)** — aggregates positions, signals, market & RSS news, then asks the model for aggressive buy/sell advice (`/ia`, max 1 request/day, skips closed-market days, toggleable, also works on backtests).
 - 🌍 **Bilingual** — English & French, switch anytime with `/langue`.
 - 🔒 **Password-protected** access (first connection) — configurable.
 - 🔌 **Broker connectors** — Alpaca (paper) + 100+ crypto exchanges via CCXT (Binance, Kraken…).
