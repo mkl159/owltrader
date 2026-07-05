@@ -179,7 +179,8 @@ def main_menu(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
              InlineKeyboardButton(b("btn_simulate"), callback_data="simuler")],
             [InlineKeyboardButton(b("btn_ideas"), callback_data="idees"),
              InlineKeyboardButton(b("btn_movers"), callback_data="movers")],
-            [InlineKeyboardButton(b("btn_market"), callback_data="marche")],
+            [InlineKeyboardButton(b("btn_market"), callback_data="marche"),
+             InlineKeyboardButton(b("btn_ia"), callback_data="ia_panel")],
             [InlineKeyboardButton(b("btn_watchlist"), callback_data="watchlist"),
              InlineKeyboardButton(b("btn_portfolio"), callback_data="pf")],
             [InlineKeyboardButton(b("btn_perf"), callback_data="perf"),
@@ -201,7 +202,8 @@ def auto_menu_keyboard(active: bool) -> InlineKeyboardMarkup:
         ]
     else:
         rows += [[InlineKeyboardButton("🤖 Démarrer avec 1000 €", callback_data="auto_start")]]
-    rows.append([InlineKeyboardButton("🧪 Simuler d'abord", callback_data="simuler")])
+    rows.append([InlineKeyboardButton("🧠 Conseiller IA (modes)", callback_data="ia_panel"),
+                 InlineKeyboardButton("🧪 Simuler d'abord", callback_data="simuler")])
     rows.append([InlineKeyboardButton("⬅️ Retour", callback_data="menu")])
     return InlineKeyboardMarkup(rows)
 
@@ -1405,6 +1407,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await q.edit_message_text(
             f"🎚️ Agressivité réglée sur *{name}*.", parse_mode=MD,
             reply_markup=back_button("auto_menu"))
+    if data == "ia_panel":
+        return await q.edit_message_text(_ia_status_text(db), parse_mode=MD,
+                                         reply_markup=_ia_keyboard(db))
     if data.startswith("ia:"):
         parts_cb = data.split(":")
         action = parts_cb[1]
