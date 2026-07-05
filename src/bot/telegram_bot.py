@@ -662,7 +662,9 @@ def _ia_status_text(db) -> str:
         "court terme tranchés* : ACHETER / VENDRE / RENFORCER + stops et objectifs.\n"
         "🤖 *Exécution auto* : si activée, le bot APPLIQUE les ordres IA sur le compte "
         "fictif (achats/ventes réels du paper-trading, frais inclus, loggués).\n"
-        "Limites : 1 requête/jour · pas d'appel sans position ni bourse fermée.\n\n"
+        "Limites : 1 requête/jour · pas d'appel sans position ni bourse fermée.\n"
+        "🕐 Conseil quotidien envoyé *en pleine séance* : 12h45 heure de New York "
+        "(≈18h45 Paris), quand le marché US est actif.\n\n"
         "_⚠️ Avis d'IA, pas un conseil financier. Trading 100% fictif._"
     )
 
@@ -1786,7 +1788,10 @@ def build_application() -> Application:
     app.job_queue.run_daily(auto_bilan_job, time=dtime(hour=18, minute=0))
     app.job_queue.run_daily(autotune_job, time=dtime(hour=7, minute=0))
     app.job_queue.run_daily(backup_job, time=dtime(hour=6, minute=0))
-    # Conseil IA quotidien (si activé) — 17h30, uniquement les jours de bourse ouverte
-    app.job_queue.run_daily(ia_daily_job, time=dtime(hour=17, minute=30))
+    # Conseil IA quotidien (si activé) — EN PLEINE SÉANCE, à l'heure locale de la bourse :
+    # 12h45 America/New_York = milieu de la séance US (novembre/mars gérés par le fuseau).
+    from zoneinfo import ZoneInfo
+    app.job_queue.run_daily(ia_daily_job,
+                            time=dtime(hour=12, minute=45, tzinfo=ZoneInfo("America/New_York")))
     app.job_queue.run_repeating(alerts_job, interval=auto_min * 60, first=60)
     return app
