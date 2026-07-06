@@ -228,7 +228,13 @@ class MarketService:
         pc = self._paper_conf()
         mkt = hist.get(pc.get("regime_symbol", "INDEX:^GSPC"))
         regime_ok = market_ok_now(mkt) if mkt is not None else True
-        return {"market": market, "ideas": buys[:3], "regime_ok": regime_ok}
+        macro = None
+        try:
+            from .macro import macro_regime
+            macro = macro_regime(self)
+        except Exception:  # noqa: BLE001
+            pass
+        return {"market": market, "ideas": buys[:3], "regime_ok": regime_ok, "macro": macro}
 
     def team_votes(self, raw: str) -> dict | None:
         """Vote de chaque stratégie de l'équipe pour un actif (transparence des décisions)."""

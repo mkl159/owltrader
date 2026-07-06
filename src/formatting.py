@@ -187,6 +187,10 @@ def briefing_block(brief: dict, rc, season) -> str:
     # Risque
     if rc:
         lines.append(f"🌐 Risque : {rc.label} · {rc.vix_note}")
+    # Régime macro cross-actifs
+    macro = brief.get("macro")
+    if macro:
+        lines.append(f"{macro.emoji} Macro : {macro.label} ({macro.score:+.0f})")
     # Saison
     if season:
         arrow = "🟢" if season.bias > 0.15 else "🔴" if season.bias < -0.15 else "⚪"

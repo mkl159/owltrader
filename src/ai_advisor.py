@@ -180,6 +180,13 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
     except Exception:  # noqa: BLE001
         pass
     try:
+        from .macro import macro_regime, macro_summary_line
+        line = macro_summary_line(macro_regime(svc))
+        if line:
+            parts.append(line)
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         s, _, nh = svc.season()
         hol = f", prochain férié {nh[1]} dans {nh[0]}j" if nh else ""
         parts.append(f"SAISON: biais {s.bias:+.2f}{hol}")

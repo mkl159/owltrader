@@ -23,13 +23,17 @@ def alpaca_base(mode: str | None = None) -> str:
 
 
 def to_alpaca_symbol(raw: str) -> str | None:
-    """Convertit un actif interne vers le symbole Alpaca (None si non supporté)."""
+    """Convertit un actif interne vers le symbole Alpaca (None si non tradable).
+
+    Alpaca ne gère que les actions US et quelques cryptos — pas les actions
+    européennes (suffixe .PA/.DE…), ni indices/FX/matières.
+    """
     a = Asset.parse(raw)
     if a.klass == "CRYPTO":
         return f"{a.symbol}/USD"
-    if a.klass == "STOCK":
+    if a.klass == "STOCK" and "." not in a.symbol:   # US uniquement (exclut .PA, .DE…)
         return a.symbol
-    return None  # indices, FX, matières : non gérés par Alpaca simplement
+    return None
 
 
 class AlpacaBroker(Broker):
@@ -78,6 +82,13 @@ class AlpacaBroker(Broker):
             }
             for p in self._get("/v2/positions")
         ]
+
+    def get_open_orders(self) -> list[str]:
+        """Symboles ayant un ordre en attente (non exécuté) — évite les doublons."""
+        try:
+            return [o["symbol"] for o in self._get("/v2/orders?status=open&limit=100")]
+        except Exception:  # noqa: BLE001
+            return []
 
     def submit_order(self, symbol: str, qty: float, side: str) -> dict:
         r = self.s.post(

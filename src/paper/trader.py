@@ -223,6 +223,52 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
     return executed
 
 
+def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> list[dict]:
+    """Exécute les ordres du conseiller IA sur le compte Alpaca (paper ou live).
+
+    L'IA peut proposer n'importe quel actif ; seuls ceux tradables chez Alpaca (actions US
+    + crypto) sont exécutés. Les autres (Paris, indices…) sont ignorés proprement.
+    """
+    from ..brokers.alpaca import to_alpaca_symbol
+    alloc = paper_cfg.get("alloc_pct", 20)
+    acc = broker.get_account()
+    equity, cash = acc.get("equity", 0.0), acc.get("cash", 0.0)
+    positions = {p["symbol"]: p for p in broker.get_positions()}
+    pending = set(broker.get_open_orders()) if hasattr(broker, "get_open_orders") else set()
+    executed: list[dict] = []
+
+    for o in [x for x in orders if x["action"] == "SELL"]:
+        sym = to_alpaca_symbol(o["asset"])
+        if not sym or sym not in positions or sym in pending:
+            continue
+        try:
+            broker.submit_order(sym, abs(positions[sym]["qty"]), "sell")
+            executed.append({"side": "VENTE", "asset": sym, "quantity": positions[sym]["qty"],
+                             "price": positions[sym].get("avg_entry_price", 0), "fee": 0.0,
+                             "pnl": 0.0, "motif": "ordre IA"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("Alpaca IA vente %s : %s", sym, e)
+
+    for o in [x for x in orders if x["action"] == "BUY"]:
+        sym = to_alpaca_symbol(o["asset"])
+        if not sym or sym in positions or sym in pending or cash < 5:
+            continue
+        q = svc.quote(o["asset"])
+        if q is None or not (q.price == q.price) or q.price <= 0:
+            continue
+        qty = round(min(equity * alloc / 100.0, cash * 0.98) / q.price, 6)
+        if qty <= 0:
+            continue
+        try:
+            broker.submit_order(sym, qty, "buy")
+            cash -= qty * q.price
+            executed.append({"side": "ACHAT", "asset": sym, "quantity": qty, "price": q.price,
+                             "fee": 0.0, "pnl": 0.0, "motif": "ordre IA"})
+        except Exception as e:  # noqa: BLE001
+            log.warning("Alpaca IA achat %s : %s", sym, e)
+    return executed
+
+
 def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: dict) -> list[dict]:
     """Applique la stratégie du bot sur un VRAI broker (Alpaca) : achète/vend en autonome.
 
@@ -239,6 +285,8 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
     equity = acc.get("equity", 0.0)
     cash = acc.get("cash", 0.0)
     positions = {p["symbol"]: p for p in broker.get_positions()}
+    # Ordres en attente (marché fermé, non encore exécutés) : on ne double pas
+    pending = set(broker.get_open_orders()) if hasattr(broker, "get_open_orders") else set()
 
     # Décisions par actif (uniquement ceux tradables chez le broker)
     wants: dict[str, str] = {}      # symbole broker -> actif interne
@@ -256,9 +304,9 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             continue
 
     executed: list[dict] = []
-    # VENTES : positions détenues que la stratégie ne veut plus
+    # VENTES : positions détenues que la stratégie ne veut plus (et sans ordre en attente)
     for sym, p in positions.items():
-        if sym not in wants:
+        if sym not in wants and sym not in pending:
             try:
                 broker.submit_order(sym, abs(p["qty"]), "sell")
                 executed.append({"side": "VENTE", "asset": sym, "quantity": p["qty"],
@@ -272,7 +320,7 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
     for sym, raw in wants.items():
         if free <= 0 or cash < 5:
             break
-        if sym in positions:
+        if sym in positions or sym in pending:   # déjà détenu ou ordre en cours
             continue
         q = svc.quote(raw)
         if q is None or not (q.price == q.price) or q.price <= 0:

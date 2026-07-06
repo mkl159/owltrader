@@ -53,3 +53,13 @@ def test_i18n():
     assert t("unknown_key", "en") == "unknown_key"   # repli sur la clé
     assert normalize_lang("en-GB") == "en"
     assert normalize_lang("xx") == "fr"              # repli défaut
+
+
+def test_macro_labels():
+    from src.macro import MacroRegime, _regime_label, macro_summary_line
+    assert "RISK-ON" in _regime_label(50).upper()
+    assert "RISK-OFF" in _regime_label(-50).upper()
+    m = MacroRegime(score=20, label=_regime_label(20),
+                    components=[("Small caps vs large", "risk-on", 4.7)])
+    assert macro_summary_line(m).startswith("MACRO CROSS-ACTIFS")
+    assert macro_summary_line(None) == ""

@@ -92,6 +92,7 @@ HELP = (
     "• /maitres — les traders légendaires derrière le bot\n"
     "• /tendance `AAPL` — tendance agrégée (multi-sources)\n"
     "• /marche — tendance générale du marché\n"
+    "• /macro — régime cross-actifs risk-on/risk-off\n"
     "• /saison — contexte saisonnier + jours fériés\n"
     "• /risque — climat macro/géopolitique (VIX + actus)\n"
     "• /movers — plus fortes hausses/baisses du jour\n\n"
@@ -720,31 +721,58 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
         advice, orders = ai.parse_orders(raw_advice)
         await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3700]}", parse_mode=MD)
 
-        # 🤖 Exécution automatique des ordres IA (si activée)
+        # 🤖 Exécution automatique des ordres IA (si activée). Cible = Alpaca si branché,
+        # sinon le compte fictif interne.
         if orders and db.get_config("AI_EXEC_ENABLED") == "1":
-            executed = await asyncio.to_thread(
-                trader.execute_orders, db, svc, chat_id, orders, _paper_cfg(), _universe())
+            alpaca_mode = db.get_config("ALPACA_AUTO")
             dev = _paper_cfg().get("devise", "EUR")
-            if executed:
-                for tr in executed:
-                    tag = ("\n🔍 _découverte IA via les actus — ajoutée à ton univers de suivi_"
-                           if "découverte" in tr.get("motif", "")
-                           else "\n🧠 _ordre du conseiller IA_")
+            if alpaca_mode in ("paper", "live"):
+                # --- Exécution sur Alpaca (paper/réel) ---
+                def _exec_alpaca():
+                    from ..brokers.alpaca import AlpacaBroker
+                    b = AlpacaBroker(mode=alpaca_mode)
+                    return trader.execute_orders_alpaca(b, svc, orders, _paper_cfg())
+                try:
+                    executed = await asyncio.to_thread(_exec_alpaca)
+                except Exception as e:  # noqa: BLE001
+                    return await context.bot.send_message(
+                        chat_id, f"❌ Exécution Alpaca impossible : {esc_md(str(e)[:150])}")
+                tag_env = "PAPER" if alpaca_mode == "paper" else "RÉEL 💸"
+                if executed:
+                    for tr in executed:
+                        ic = "🟢 ACHAT" if tr["side"] == "ACHAT" else "🔴 VENTE"
+                        await context.bot.send_message(
+                            chat_id, f"🦙 *Alpaca {tag_env}* — {ic} {tr['asset']} × {tr['quantity']:g}\n"
+                                     "🧠 _ordre du conseiller IA_", parse_mode=MD)
+                        db.log_event(chat_id, "ai_exec", f"alpaca-{alpaca_mode}: {tr['side']} {tr['asset']}")
+                else:
                     await context.bot.send_message(
-                        chat_id,
-                        trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
-                                  tr.get("pnl") if tr["side"] == "VENTE" else None, dev) + tag,
-                        parse_mode=MD)
-                    db.log_event(chat_id, "ai_exec", f"{tr['side']} {tr['asset']} ({tr.get('motif','')})")
-                acc2, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
-                invested = sum(h["value"] for h in holdings)
-                await context.bot.send_message(
-                    chat_id, state_recap(acc2["cash"], invested, len(holdings), equity,
-                                         acc2["capital"], dev), parse_mode=MD)
+                        chat_id, "🤖 Ordres IA reçus mais rien d'exécutable sur Alpaca "
+                                 "(actifs non-US, déjà détenus, ou ordres en attente).")
             else:
-                await context.bot.send_message(
-                    chat_id, "🤖 Ordres IA reçus mais non exécutables (actif inconnu, cash ou "
-                             "limites) — aucun trade passé.")
+                # --- Exécution sur le compte fictif interne ---
+                executed = await asyncio.to_thread(
+                    trader.execute_orders, db, svc, chat_id, orders, _paper_cfg(), _universe())
+                if executed:
+                    for tr in executed:
+                        tag = ("\n🔍 _découverte IA via les actus — ajoutée à ton univers de suivi_"
+                               if "découverte" in tr.get("motif", "")
+                               else "\n🧠 _ordre du conseiller IA_")
+                        await context.bot.send_message(
+                            chat_id,
+                            trade_log(tr["side"], tr["asset"], tr["quantity"], tr["price"], tr["fee"],
+                                      tr.get("pnl") if tr["side"] == "VENTE" else None, dev) + tag,
+                            parse_mode=MD)
+                        db.log_event(chat_id, "ai_exec", f"{tr['side']} {tr['asset']} ({tr.get('motif','')})")
+                    acc2, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+                    invested = sum(h["value"] for h in holdings)
+                    await context.bot.send_message(
+                        chat_id, state_recap(acc2["cash"], invested, len(holdings), equity,
+                                             acc2["capital"], dev), parse_mode=MD)
+                else:
+                    await context.bot.send_message(
+                        chat_id, "🤖 Ordres IA reçus mais non exécutables (actif inconnu, cash ou "
+                                 "limites) — aucun trade passé.")
         elif orders:
             noms = ", ".join(f"{o['action']} {o['asset']}" for o in orders)
             await context.bot.send_message(
@@ -1054,6 +1082,21 @@ async def sources(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔄 Pour chaque cours, je récupère *toutes* les sources en parallèle et je garde "
         "*la plus fraîche*. Si l'une tombe, les autres prennent le relais — jamais de trou.",
         parse_mode=MD)
+
+
+async def macro_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Régime macro cross-actifs (risk-on / risk-off) via les rapports d'ETF."""
+    from ..macro import macro_regime
+    msg = await update.message.reply_text("📐 Analyse cross-actifs (risk-on/off)…")
+    m = await asyncio.to_thread(macro_regime, _svc(context))
+    if m is None:
+        return await msg.edit_text("📐 Régime macro indisponible.")
+    lines = [f"{m.emoji} *Régime macro : {m.label}*", f"Score risk-on/off : *{m.score:+.0f}/100*", ""]
+    for label, sens, chg in m.components:
+        lines.append(f"{'🟢' if sens == 'risk-on' else '🔴'} {label} : *{sens}* ({chg:+.1f}%)")
+    lines.append("\n_Rapports d'ETF (small vs large, crédit, cyclique/défensif…) — "
+                 "révèlent l'appétit pour le risque. ⚠️ Info de contexte, pas un signal._")
+    await msg.edit_text("\n".join(lines), parse_mode=MD)
 
 
 async def saison(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1970,6 +2013,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["maitres", "legendes", "masters"], maitres))
     app.add_handler(CommandHandler(["apercu", "brief", "briefing", "dashboard"], apercu))
     app.add_handler(CommandHandler(["sources", "source"], sources))
+    app.add_handler(CommandHandler(["macro", "regime"], macro_cmd))
     app.add_handler(CommandHandler(["saison", "season"], saison))
     app.add_handler(CommandHandler(["risque", "risk", "geopolitique"], risque))
     app.add_handler(CommandHandler(["univers", "universe"], univers))
