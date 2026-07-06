@@ -928,6 +928,7 @@ def _alpaca_auto_keyboard(db) -> InlineKeyboardMarkup:
     def mk(v, label):
         return ("✅ " if mode == v else "") + label
     return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📊 Mon bilan Alpaca (gains + graphique)", callback_data="alp:bilan")],
         [InlineKeyboardButton(mk("off", "⚪ Désactivé"), callback_data="alp:off")],
         [InlineKeyboardButton(mk("paper", "🧪 Auto sur Alpaca PAPER (gratuit, sans risque)"),
                               callback_data="alp:paper")],
@@ -936,6 +937,59 @@ def _alpaca_auto_keyboard(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton("🔌 Tester la connexion", callback_data="alp:test")],
         [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
     ])
+
+
+async def _alpaca_bilan(chat_id, context):
+    """Bilan du compte Alpaca : cash, positions, gains + courbe d'équity (comme le simulateur)."""
+    import pandas as pd
+
+    from ..formatting import esc_md
+    db = _db(context)
+    mode = db.get_config("ALPACA_AUTO") or "paper"
+
+    def _fetch():
+        from ..brokers.alpaca import AlpacaBroker
+        b = AlpacaBroker(mode=mode if mode in ("paper", "live") else "paper")
+        return b.get_account(), b.get_positions(), b.portfolio_history()
+
+    try:
+        acc, pos, ph = await asyncio.to_thread(_fetch)
+    except Exception as e:  # noqa: BLE001
+        return await context.bot.send_message(
+            chat_id, f"❌ Alpaca non connecté : {esc_md(str(e)[:150])}\n"
+                     "Configure `/set ALPACA_API_KEY_ID …` et `/set ALPACA_API_SECRET …`.",
+            parse_mode=MD)
+    cur = acc.get("currency", "USD")
+    ts = ph.get("timestamp", []) or []
+    eq = ph.get("equity", []) or []
+    pairs = [(t, e) for t, e in zip(ts, eq, strict=False) if e]
+    base = ph.get("base_value") or (pairs[0][1] if pairs else acc["equity"])
+    pnl = acc["equity"] - base
+    pct = (pnl / base * 100) if base else 0
+    emoji = "🟢" if pnl >= 0 else "🔴"
+    env = "PAPER (fictif)" if mode != "live" else "RÉEL"
+    lines = [f"{emoji} *Bilan Alpaca {env}*",
+             f"📊 Valeur : *{acc['equity']:.2f} {cur}*  (départ {base:.0f})",
+             f"💰 Gain/perte : *{pnl:+.2f} {cur}* ({pct:+.1f}%)",
+             f"💵 Cash : {acc['cash']:.2f} {cur}"]
+    if pos:
+        lines.append("\n📦 *Positions*")
+        for p in pos:
+            lines.append(f"• {p['symbol']} : {p['qty']:g} ({p['unrealized_plpc']:+.1f}%)")
+    else:
+        lines.append("\n📦 Aucune position (ordres en attente si marché fermé).")
+    await context.bot.send_message(chat_id, "\n".join(lines), parse_mode=MD)
+
+    # Graphique d'équity (même rendu que le simulateur)
+    if len(pairs) >= 2:
+        series = pd.Series([e for _, e in pairs],
+                           index=pd.to_datetime([t for t, _ in pairs], unit="s"))
+        path = await asyncio.to_thread(make_equity_chart, series, base,
+                                       f"Mon compte Alpaca ({env})", f"alpaca_{chat_id}")
+        if path:
+            with open(path, "rb") as f:
+                await context.bot.send_photo(chat_id, photo=f,
+                                             caption="📈 Évolution de ton capital Alpaca")
 
 
 def _alpaca_auto_text(db) -> str:
@@ -1625,6 +1679,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                          reply_markup=_alpaca_auto_keyboard(db))
     if data.startswith("alp:"):
         sub = data.split(":", 1)[1]
+        if sub == "bilan":
+            await q.answer("📊 Je récupère ton compte Alpaca…")
+            return await _alpaca_bilan(chat_id, context)
         if sub in ("off", "paper", "live"):
             db.set_config("ALPACA_AUTO", sub)
             if sub == "live":
@@ -2004,6 +2061,8 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["config", "configuration"], config_cmd))
     app.add_handler(CommandHandler("set", set_cmd))
     app.add_handler(CommandHandler(["del", "supprimer"], del_cmd))
+    app.add_handler(CommandHandler(["bilanalpaca", "alpacabilan"],
+                                   lambda u, c: _alpaca_bilan(u.effective_chat.id, c)))
     app.add_handler(CommandHandler(["traderepublic", "tr"], traderepublic_cmd))
     app.add_handler(CommandHandler("tr_code", tr_code_cmd))
     app.add_handler(CommandHandler(["broker", "exchange", "echange"], broker_cmd))

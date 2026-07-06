@@ -83,6 +83,11 @@ class AlpacaBroker(Broker):
             for p in self._get("/v2/positions")
         ]
 
+    def portfolio_history(self, period: str = "1M", timeframe: str = "1D") -> dict:
+        """Historique de la valeur du compte (courbe d'équity) fournie par Alpaca."""
+        return self._get(
+            f"/v2/account/portfolio/history?period={period}&timeframe={timeframe}&extended_hours=true")
+
     def get_open_orders(self) -> list[str]:
         """Symboles ayant un ordre en attente (non exécuté) — évite les doublons."""
         try:
