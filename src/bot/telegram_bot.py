@@ -183,6 +183,7 @@ def main_menu(lang: str = DEFAULT_LANG) -> InlineKeyboardMarkup:
              InlineKeyboardButton(b("btn_movers"), callback_data="movers")],
             [InlineKeyboardButton(b("btn_market"), callback_data="marche"),
              InlineKeyboardButton(b("btn_ia"), callback_data="ia_panel")],
+            [InlineKeyboardButton(b("btn_brokers"), callback_data="brokers_menu")],
             [InlineKeyboardButton(b("btn_watchlist"), callback_data="watchlist"),
              InlineKeyboardButton(b("btn_portfolio"), callback_data="pf")],
             [InlineKeyboardButton(b("btn_perf"), callback_data="perf"),
@@ -923,6 +924,40 @@ async def _tr_show_account(msg, broker):
     await msg.edit_text("\n".join(lines), parse_mode=MD)
 
 
+def _brokers_hub_text(db) -> str:
+    alp_ok = bool(get_secret("ALPACA_API_KEY_ID"))
+    alp_mode = db.get_config("ALPACA_AUTO") or "off"
+    tr_ok = bool(get_secret("TR_PHONE"))
+    ex_name = get_secret("EXCHANGE_NAME")
+    def st(ok):
+        return "✅ configuré" if ok else "❌ non configuré"
+    alp_line = st(alp_ok)
+    if alp_ok and alp_mode in ("paper", "live"):
+        alp_line += f" · auto *{ 'PAPER' if alp_mode=='paper' else 'RÉEL' }*"
+    return (
+        "🔌 *Brokers* — connecte le bot à un courtier\n\n"
+        f"🦙 *Alpaca* (actions US + crypto) : {alp_line}\n"
+        f"🏦 *Trade Republic* (lecture seule) : {st(tr_ok)}\n"
+        f"💱 *Échange crypto* (ccxt) : {('✅ ' + ex_name) if ex_name else '❌ non configuré'}\n\n"
+        "_🦙 Alpaca = trading autonome réel (paper gratuit). 🏦 TR = lecture seule "
+        "(2FA par ordre). 💱 Échanges crypto = auto possible (clés API)._"
+    )
+
+
+def _brokers_hub_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🦙 Alpaca (auto + bilan)", callback_data="alpaca_panel")],
+        [InlineKeyboardButton("🏦 Trade Republic (lecture)", callback_data="brk:tr")],
+        [InlineKeyboardButton("💱 Échange crypto (Binance…)", callback_data="brk:ccxt")],
+        [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
+    ])
+
+
+async def brokers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(_brokers_hub_text(_db(context)), parse_mode=MD,
+                                    reply_markup=_brokers_hub_keyboard())
+
+
 def _alpaca_auto_keyboard(db) -> InlineKeyboardMarkup:
     mode = db.get_config("ALPACA_AUTO") or "off"
     def mk(v, label):
@@ -935,7 +970,7 @@ def _alpaca_auto_keyboard(db) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(mk("live", "💸 Auto sur Alpaca RÉEL (vrai argent)"),
                               callback_data="alp:live")],
         [InlineKeyboardButton("🔌 Tester la connexion", callback_data="alp:test")],
-        [InlineKeyboardButton("⬅️ Retour", callback_data="menu")],
+        [InlineKeyboardButton("⬅️ Brokers", callback_data="brokers_menu")],
     ])
 
 
@@ -1674,6 +1709,62 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "ia_panel":
         return await q.edit_message_text(_ia_status_text(db), parse_mode=MD,
                                          reply_markup=_ia_keyboard(db))
+    if data == "brokers_menu":
+        return await q.edit_message_text(_brokers_hub_text(db), parse_mode=MD,
+                                         reply_markup=_brokers_hub_keyboard())
+    if data == "brk:tr":
+        if not get_secret("TR_PHONE"):
+            return await q.edit_message_text(
+                "🏦 *Trade Republic* (lecture seule)\n\nConfigure d'abord :\n"
+                "`/set TR_PHONE +33...`\n`/set TR_PIN ****`\nPuis tape /traderepublic.",
+                parse_mode=MD, reply_markup=back_button("brokers_menu"))
+        await q.edit_message_text("🏦 Lecture du compte Trade Republic… (tape /traderepublic "
+                                  "si un code 2FA est demandé)")
+        def _read_tr():
+            from ..brokers.traderepublic import TradeRepublicBroker
+            b = TradeRepublicBroker()
+            if not b.resume():
+                return None
+            return b.get_account(), b.get_positions()
+        try:
+            res = await asyncio.to_thread(_read_tr)
+        except Exception as e:  # noqa: BLE001
+            from ..formatting import esc_md
+            return await q.edit_message_text(f"❌ {esc_md(str(e)[:150])}",
+                                             reply_markup=back_button("brokers_menu"))
+        if res is None:
+            return await q.edit_message_text(
+                "🔐 Session TR expirée. Tape /traderepublic pour te reconnecter (2FA).",
+                reply_markup=back_button("brokers_menu"))
+        acc, pos = res
+        lines = [f"🏦 *{acc['status']}*", f"💵 Cash : {acc['cash']:.2f} {acc['currency']}",
+                 f"📊 Total : *{acc['equity']:.2f} {acc['currency']}*"]
+        for p in pos[:15]:
+            lines.append(f"• `{p['symbol']}` {p['qty']:g} @ {p['avg_entry_price']:.2f}")
+        return await q.edit_message_text("\n".join(lines), parse_mode=MD,
+                                         reply_markup=back_button("brokers_menu"))
+    if data == "brk:ccxt":
+        if not get_secret("EXCHANGE_NAME"):
+            return await q.edit_message_text(
+                "💱 *Échange crypto* (Binance, Kraken…)\n\nConfigure :\n"
+                "`/set EXCHANGE_NAME binance`\n`/set EXCHANGE_API_KEY …`\n`/set EXCHANGE_API_SECRET …`",
+                parse_mode=MD, reply_markup=back_button("brokers_menu"))
+        await q.edit_message_text("💱 Connexion à l'échange…")
+        def _ccxt():
+            from ..brokers import CCXTBroker
+            b = CCXTBroker()
+            return b.get_account(), b.get_positions()
+        try:
+            acc, pos = await asyncio.to_thread(_ccxt)
+        except Exception as e:  # noqa: BLE001
+            from ..formatting import esc_md
+            return await q.edit_message_text(f"❌ {esc_md(str(e)[:150])}",
+                                             reply_markup=back_button("brokers_menu"))
+        lines = [f"💱 *{acc['status']}*", f"💵 {acc['cash']:.2f} {acc['currency']}"]
+        for p in pos[:15]:
+            lines.append(f"• {p['symbol']} : {p['qty']:g}")
+        return await q.edit_message_text("\n".join(lines), parse_mode=MD,
+                                         reply_markup=back_button("brokers_menu"))
     if data == "alpaca_panel":
         return await q.edit_message_text(_alpaca_auto_text(db), parse_mode=MD,
                                          reply_markup=_alpaca_auto_keyboard(db))
@@ -2063,6 +2154,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler(["del", "supprimer"], del_cmd))
     app.add_handler(CommandHandler(["bilanalpaca", "alpacabilan"],
                                    lambda u, c: _alpaca_bilan(u.effective_chat.id, c)))
+    app.add_handler(CommandHandler(["brokers", "courtiers"], brokers_cmd))
     app.add_handler(CommandHandler(["traderepublic", "tr"], traderepublic_cmd))
     app.add_handler(CommandHandler("tr_code", tr_code_cmd))
     app.add_handler(CommandHandler(["broker", "exchange", "echange"], broker_cmd))

@@ -40,6 +40,7 @@ TR: dict[str, dict[str, str]] = {
     "btn_movers": {"fr": "🚀 Top mouvements", "en": "🚀 Top movers"},
     "btn_market": {"fr": "🌍 Tendance marché", "en": "🌍 Market trend"},
     "btn_ia": {"fr": "🧠 Conseiller IA", "en": "🧠 AI advisor"},
+    "btn_brokers": {"fr": "🔌 Brokers", "en": "🔌 Brokers"},
     "btn_watchlist": {"fr": "👁️ Ma watchlist", "en": "👁️ My watchlist"},
     "btn_portfolio": {"fr": "💼 Portefeuille", "en": "💼 Portfolio"},
     "btn_perf": {"fr": "📈 Performance", "en": "📈 Performance"},
