@@ -669,7 +669,7 @@ def _ia_keyboard(db) -> InlineKeyboardMarkup:
 def _ia_status_text(db) -> str:
     from .. import ai_advisor as ai
     ok = ai.is_configured()
-    quota = "✅ disponible aujourd'hui" if ai.can_call(db) else "⏳ déjà utilisée aujourd'hui (1/jour)"
+    quota = "✅ disponible aujourd'hui" if ai.can_call(db) else "⏳ déjà passée aujourd'hui (auto = 1/jour)"
     model = (db.get_config("OPENAI_MODEL") or ai.DEFAULT_MODEL)
     live = _ia_mode_live(db)
     simm = _ia_mode_sim(db)
@@ -683,10 +683,12 @@ def _ia_status_text(db) -> str:
     return (
         "🧠 *Conseiller IA (OpenAI)* — facultatif\n\n"
         f"Clé : {'✅' if ok else '❌ (/set OPENAI_API_KEY ta-clé)'} · Modèle : `{model}`\n"
-        f"Requête du jour : {quota}\n\n"
+        f"Consultation auto : {quota}\n\n"
         f"🤖 Mode trading : {live_txt}\n\n"
         f"🧪 Mode simulateur : {sim_txt}\n\n"
-        "Limites : 1 requête/jour · pas d'appel sans position ni bourse fermée.\n"
+        "💬 *Le bouton « Demander un avis maintenant » est illimité* — il ne compte pas dans "
+        "la limite du jour (réservée à la consultation automatique). Chaque appel consomme "
+        "toutefois des tokens OpenAI.\n"
         "_⚠️ Avis d'IA, pas un conseil financier. Trading 100% fictif._"
     )
 
@@ -706,9 +708,16 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
     if not ai.is_configured():
         return await context.bot.send_message(
             chat_id, "❌ Clé OpenAI absente. Configure-la : `/set OPENAI_API_KEY ta-clé`", parse_mode=MD)
-    if not ai.can_call(db):
+    # Seule la consultation AUTOMATIQUE (daily) est limitée à 1/jour. Le bouton manuel
+    # est illimité (juste protégé d'un double-clic accidentel).
+    manual = source != "daily"
+    if not manual and not ai.can_call(db):
         return await context.bot.send_message(
-            chat_id, "⏳ La requête IA du jour a déjà été utilisée (limite : 1/jour).")
+            chat_id, "⏳ La consultation IA *automatique* du jour a déjà eu lieu (1/jour).\n"
+                     "💬 Tu peux quand même en lancer une toi-même via le bouton.", parse_mode=MD)
+    if manual and not ai.manual_ready(db):
+        return await context.bot.send_message(
+            chat_id, "⏳ Tu viens de lancer une demande — patiente ~1 min avant d'en relancer une.")
     positions = db.paper_positions(chat_id)
     if source == "live" and not positions:
         return await context.bot.send_message(
@@ -717,7 +726,11 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
     try:
         ctx_text = await asyncio.to_thread(ai.build_context, svc, db, chat_id, _universe())
         raw_advice = await asyncio.to_thread(ai.ask, ctx_text)
-        ai.record_call(db)
+        # Le manuel ne consomme PAS le quota du jour ; seul l'automatique l'enregistre.
+        if manual:
+            ai.record_manual(db)
+        else:
+            ai.record_call(db)
         db.log_event(chat_id, "ai_call", f"source={source}")
         advice, orders = ai.parse_orders(raw_advice)
         await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3700]}", parse_mode=MD)
@@ -986,8 +999,9 @@ async def _alpaca_bilan(chat_id, context):
     def _fetch():
         from ..brokers.alpaca import AlpacaBroker
         b = AlpacaBroker(mode=mode if mode in ("paper", "live") else "paper")
-        # Pas horaire sur 1 mois : capture l'intraday (un compte récent est plat en journalier).
-        return b.get_account(), b.get_positions(), b.portfolio_history(period="1M", timeframe="1H")
+        # Pas journalier (Alpaca refuse 1H sur 1 mois) ; l'ancrage de l'équity actuelle
+        # plus bas suffit à montrer le gain du jour même sur un compte récent.
+        return b.get_account(), b.get_positions(), b.portfolio_history(period="1M", timeframe="1D")
 
     try:
         acc, pos, ph = await asyncio.to_thread(_fetch)

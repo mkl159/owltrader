@@ -70,7 +70,7 @@ def _max_tokens() -> int:
         return DEFAULT_MAX_TOKENS
 
 
-# --- Quota : 1 requête / jour, partagé entre live et simulateur ---
+# --- Quota : 1 requête / jour pour la consultation AUTOMATIQUE (économie de tokens) ---
 def can_call(db) -> bool:
     last = db.get_config("AI_LAST_CALL")
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -79,6 +79,27 @@ def can_call(db) -> bool:
 
 def record_call(db):
     db.set_config("AI_LAST_CALL", datetime.now(timezone.utc).strftime("%Y-%m-%d"))
+
+
+# --- Demande MANUELLE (bouton) : illimitée, mais protégée d'un double-clic accidentel ---
+MANUAL_COOLDOWN_S = 45
+
+
+def manual_ready(db) -> bool:
+    """True si on peut relancer une demande manuelle (anti-double-clic, pas une limite/jour)."""
+    import time
+    last = db.get_config("AI_LAST_MANUAL")
+    if not last:
+        return True
+    try:
+        return (time.time() - float(last)) >= MANUAL_COOLDOWN_S
+    except ValueError:
+        return True
+
+
+def record_manual(db):
+    import time
+    db.set_config("AI_LAST_MANUAL", str(time.time()))
 
 
 def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
