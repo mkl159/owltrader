@@ -986,7 +986,8 @@ async def _alpaca_bilan(chat_id, context):
     def _fetch():
         from ..brokers.alpaca import AlpacaBroker
         b = AlpacaBroker(mode=mode if mode in ("paper", "live") else "paper")
-        return b.get_account(), b.get_positions(), b.portfolio_history()
+        # Pas horaire sur 1 mois : capture l'intraday (un compte récent est plat en journalier).
+        return b.get_account(), b.get_positions(), b.portfolio_history(period="1M", timeframe="1H")
 
     try:
         acc, pos, ph = await asyncio.to_thread(_fetch)
@@ -999,6 +1000,10 @@ async def _alpaca_bilan(chat_id, context):
     ts = ph.get("timestamp", []) or []
     eq = ph.get("equity", []) or []
     pairs = [(t, e) for t, e in zip(ts, eq, strict=False) if e]
+    # L'historique Alpaca ne reflète pas toujours l'intraday du jour : on ancre le point actuel.
+    import time as _time
+    if not pairs or abs(pairs[-1][1] - acc["equity"]) > 0.01:
+        pairs.append((int(_time.time()), acc["equity"]))
     base = ph.get("base_value") or (pairs[0][1] if pairs else acc["equity"])
     pnl = acc["equity"] - base
     pct = (pnl / base * 100) if base else 0
@@ -1030,19 +1035,28 @@ async def _alpaca_bilan(chat_id, context):
 
 def _alpaca_auto_text(db) -> str:
     mode = db.get_config("ALPACA_AUTO") or "off"
-    from .. import ai_advisor  # noqa: F401 (garde l'ordre d'import cohérent)
+    configured = bool(get_secret("ALPACA_API_KEY_ID"))
     etat = {"off": "⚪ désactivé", "paper": "🧪 PAPER (faux argent, gratuit)",
             "live": "💸 RÉEL (vrai argent)"}[mode]
+    if configured:
+        setup = (
+            "✅ *Clés Alpaca configurées.*\n"
+            "Le bot applique sa stratégie *directement sur ton compte* toutes les heures "
+            "(il passe les ordres seul).\n\n"
+            "_Changer les clés : `/set ALPACA_API_KEY_ID …` · Retirer : `/del ALPACA_API_KEY_ID`_"
+        )
+    else:
+        setup = (
+            "Le bot applique sa stratégie *directement sur ton compte Alpaca* toutes les heures.\n\n"
+            "1️⃣ Crée un compte gratuit sur *alpaca.markets*\n"
+            "2️⃣ Clés : `/set ALPACA_API_KEY_ID …` et `/set ALPACA_API_SECRET …`\n"
+            "3️⃣ Choisis *PAPER* d'abord (faux argent) pour valider sans risque."
+        )
     return (
         "🦙 *Trading autonome sur Alpaca*\n\n"
         f"État actuel : *{etat}*\n\n"
-        "Le bot applique sa stratégie *directement sur ton compte Alpaca* (il passe les "
-        "ordres seul, sans 2FA par ordre) toutes les heures.\n\n"
-        "1️⃣ Crée un compte gratuit sur *alpaca.markets*\n"
-        "2️⃣ Clés : `/set ALPACA_API_KEY_ID …` et `/set ALPACA_API_SECRET …`\n"
-        "3️⃣ Choisis *PAPER* d'abord (faux argent) pour valider sans risque.\n\n"
-        "_💸 Le mode RÉEL engage du vrai argent — la stratégie n'est validée qu'en backtest. "
-        "À n'activer qu'en pleine connaissance de cause._"
+        f"{setup}\n\n"
+        "_💸 Le mode RÉEL engage du vrai argent — la stratégie n'est validée qu'en backtest._"
     )
 
 
