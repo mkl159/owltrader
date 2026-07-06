@@ -799,10 +799,11 @@ async def ia_daily_job(context: ContextTypes.DEFAULT_TYPE):
     if today.weekday() >= 5 or is_market_holiday():
         log.info("IA quotidienne : bourse fermée (week-end/férié), pas d'appel.")
         return
-    for chat_id in db.paper_active_chats():
-        if db.paper_positions(chat_id):
-            await _ia_ask_and_send(chat_id, context, source="daily")
-            break  # 1 requête/jour au total
+    # Se lance même sans position : le but est aussi de conseiller QUOI ACHETER.
+    # (1 requête/jour au total, protège le budget tokens.)
+    chats = db.paper_active_chats() or db.all_authorized()
+    if chats:
+        await _ia_ask_and_send(chats[0], context, source="daily")
 
 
 async def securite_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
