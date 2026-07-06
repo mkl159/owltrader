@@ -272,39 +272,71 @@ def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> l
 def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: dict) -> list[dict]:
     """Applique la stratégie du bot sur un VRAI broker (Alpaca) : achète/vend en autonome.
 
-    Mêmes règles que le mode autonome interne (tendance + régime déjà dans la décision),
-    mais l'exécution passe par l'API du broker. Fonctionne sur compte paper (gratuit) ou live.
+    Mêmes règles que le mode autonome interne (`run_cycle`) : décision de tendance,
+    filtre de régime (S&P > MM200), momentum absolu (Antonacci) et surtout CLASSEMENT
+    par momentum relatif — indispensable quand l'univers est large (S&P 500) : on achète
+    les plus FORTES, pas les premières dans l'ordre. Exécution via l'API du broker
+    (compte paper gratuit ou live).
     """
+    import math
+
     from ..brokers.alpaca import to_alpaca_symbol
-    from ..strategy import should_hold
-    max_pos = int(paper_cfg.get("max_positions", 5))
-    alloc = paper_cfg.get("alloc_pct", 20)
+    from ..strategy import position_series
+    max_pos = int(params.get("max_positions", paper_cfg.get("max_positions", 5)))
+    alloc = params.get("alloc_pct", paper_cfg.get("alloc_pct", 20))
     sp = {k: params[k] for k in ("short", "long", "rsi_entry_max", "rsi_exit") if k in params}
+    vt = paper_cfg.get("vol_target", 0) or 0
+    rlb = int(paper_cfg.get("rank_lookback", 0) or 0)
+    amlb = int(paper_cfg.get("abs_mom_lookback", 0) or 0)
+    ammin = paper_cfg.get("abs_mom_min", 0) or 0
 
     acc = broker.get_account()
     equity = acc.get("equity", 0.0)
     cash = acc.get("cash", 0.0)
     positions = {p["symbol"]: p for p in broker.get_positions()}
-    # Ordres en attente (marché fermé, non encore exécutés) : on ne double pas
     pending = set(broker.get_open_orders()) if hasattr(broker, "get_open_orders") else set()
 
-    # Décisions par actif (uniquement ceux tradables chez le broker)
+    # Récupération parallèle de tout l'univers tradable (rapide même sur 500 actions).
+    tradable = [raw for raw in universe if to_alpaca_symbol(raw)]
+    hist = svc.fetch_histories(tradable, period="1y")
+
+    # Décisions + métriques (momentum relatif/absolu, volatilité) par actif.
     wants: dict[str, str] = {}      # symbole broker -> actif interne
-    for raw in universe:
+    prices: dict[str, float] = {}
+    vols: dict[str, float] = {}
+    moms: dict[str, float] = {}
+    for raw, df in hist.items():
         sym = to_alpaca_symbol(raw)
-        if not sym:
-            continue
-        df = svc.history(raw, period="1y")
-        if df is None:
+        if not sym or df is None or len(df) < 2:
             continue
         try:
-            if should_hold(df, **sp):
+            last = float(df["close"].iloc[-1])
+            if math.isnan(last) or last <= 0:
+                continue
+            prices[sym] = last
+            if bool(position_series(df, **sp).iloc[-1]):
                 wants[sym] = raw
+            if vt > 0:
+                v = float(df["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
+                if v == v and v > 0:
+                    vols[sym] = v
+            if rlb > 0 and len(df) > rlb:
+                m = float(df["close"].iloc[-1] / df["close"].iloc[-1 - rlb] - 1)
+                if m == m:
+                    moms[sym] = m
         except Exception:  # noqa: BLE001
             continue
 
+    # Filtre de régime : marché global baissier -> on n'ouvre plus de position.
+    paused = False
+    if paper_cfg.get("regime_filter"):
+        from ..regime import market_ok_now
+        mkt = svc.history(paper_cfg.get("regime_symbol", "INDEX:^GSPC"), period="2y")
+        if mkt is not None and not market_ok_now(mkt):
+            paused = True
+
     executed: list[dict] = []
-    # VENTES : positions détenues que la stratégie ne veut plus (et sans ordre en attente)
+    # VENTES : positions détenues que la stratégie ne veut plus (et sans ordre en attente).
     for sym, p in positions.items():
         if sym not in wants and sym not in pending:
             try:
@@ -315,26 +347,35 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             except Exception as e:  # noqa: BLE001
                 log.warning("Alpaca vente %s : %s", sym, e)
 
-    # ACHATS : ce que la stratégie veut et qu'on ne détient pas
-    free = max_pos - len(positions)
-    for sym, raw in wants.items():
-        if free <= 0 or cash < 5:
+    # ACHATS : candidats voulus, filtrés momentum absolu, CLASSÉS par momentum relatif.
+    free = 0 if paused else max_pos - len(positions)
+    cands = [s for s in wants if s not in positions and s not in pending and s in prices]
+    if amlb > 0:
+        def _abs_mom(sym):
+            df = hist.get(wants[sym])
+            if df is None or len(df) <= amlb:
+                return None
+            return float(df["close"].iloc[-1] / df["close"].iloc[-1 - amlb] - 1)
+        cands = [s for s in cands if (_abs_mom(s) is not None and _abs_mom(s) >= ammin)]
+    if rlb > 0:  # les plus fortes d'abord
+        cands.sort(key=lambda s: moms.get(s, -9e9), reverse=True)
+
+    for sym in cands[: max(0, free)]:
+        if cash < 5:
             break
-        if sym in positions or sym in pending:   # déjà détenu ou ordre en cours
-            continue
-        q = svc.quote(raw)
-        if q is None or not (q.price == q.price) or q.price <= 0:
-            continue
-        target = min(equity * alloc / 100.0, cash * 0.98)
-        qty = round(target / q.price, 6)
+        price = prices[sym]
+        base = equity * alloc / 100.0
+        if vt > 0 and sym in vols:
+            base *= min(1.5, max(0.5, vt / vols[sym]))   # moins sur les actifs volatils
+        target = min(base, cash * 0.98)
+        qty = round(target / price, 6)
         if qty <= 0:
             continue
         try:
             broker.submit_order(sym, qty, "buy")
-            cash -= qty * q.price
-            free -= 1
+            cash -= qty * price
             executed.append({"side": "ACHAT", "asset": sym, "quantity": qty,
-                             "price": q.price, "fee": 0.0, "pnl": 0.0, "motif": "broker"})
+                             "price": price, "fee": 0.0, "pnl": 0.0, "motif": "broker"})
         except Exception as e:  # noqa: BLE001
             log.warning("Alpaca achat %s : %s", sym, e)
     return executed

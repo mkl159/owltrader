@@ -88,10 +88,12 @@ def test_run_broker_cycle_buys_and_sells():
     broker = MagicMock()
     broker.get_account.return_value = {"equity": 10000, "cash": 5000, "currency": "USD"}
     broker.get_positions.return_value = [{"symbol": "AAPL", "qty": 10, "avg_entry_price": 100}]
+    broker.get_open_orders.return_value = []
+    histories = {"STOCK:NVDA": up, "STOCK:AAPL": down}
     svc = MagicMock()
-    svc.history.side_effect = lambda raw, period="1y": {"STOCK:NVDA": up}.get(raw, down)
-    qq = MagicMock(); qq.price = 200.0
-    svc.quote.return_value = qq
+    # Nouveau cycle : récupération parallèle de tout l'univers d'un coup.
+    svc.fetch_histories.side_effect = lambda uni, period="1y": {a: histories[a] for a in uni}
+    svc.history.side_effect = lambda raw, period="1y": histories.get(raw)
 
     ex = trader.run_broker_cycle(broker, svc, ["STOCK:AAPL", "STOCK:NVDA"],
                                  {"max_positions": 5, "alloc_pct": 20}, {})
@@ -99,3 +101,49 @@ def test_run_broker_cycle_buys_and_sells():
     assert broker.submit_order.called
     assert sides.get("AAPL") == "VENTE"      # AAPL détenue mais baissière -> vendue
     assert sides.get("NVDA") == "ACHAT"      # NVDA haussière non détenue -> achetée
+
+
+def test_run_broker_cycle_ranks_by_momentum(monkeypatch):
+    """Univers large : le cycle doit acheter les plus FORTES (momentum), pas les premières.
+
+    On force la stratégie à vouloir les 3 (patch de position_series) pour isoler la
+    logique de CLASSEMENT : c'est le momentum réel (calculé sur les prix) qui doit trancher.
+    """
+    from unittest.mock import MagicMock
+
+    import numpy as np
+    import pandas as pd
+
+    import src.strategy as strategy
+    from src.paper import trader
+
+    def series(last_21d_return, seed):
+        """Série plate puis rampe finale calibrant le momentum 21 jours voulu."""
+        idx = pd.date_range("2019-01-01", periods=400, freq="D", tz="UTC")
+        rng = np.random.default_rng(seed)
+        close = 100 + rng.normal(0, 0.05, 400).cumsum()
+        ramp = np.linspace(0, last_21d_return, 21)          # +X% sur les 21 derniers jours
+        close[-21:] = close[-22] * (1 + ramp)
+        return pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99,
+                             "close": close, "volume": 1000.0}, index=idx)
+
+    histories = {"STOCK:WEAK": series(0.03, 1),      # +3 % sur 21 j
+                 "STOCK:MID": series(0.08, 2),       # +8 %
+                 "STOCK:STRONG": series(0.15, 3)}    # +15 % (la plus forte)
+    # La stratégie veut détenir les 3 : le tri par momentum est le seul discriminant.
+    monkeypatch.setattr(strategy, "position_series",
+                        lambda df, **kw: pd.Series([1] * len(df), index=df.index))
+
+    broker = MagicMock()
+    broker.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+    broker.get_positions.return_value = []
+    broker.get_open_orders.return_value = []
+    svc = MagicMock()
+    svc.fetch_histories.side_effect = lambda uni, period="1y": {a: histories[a] for a in uni}
+    svc.history.side_effect = lambda raw, period="1y": histories.get(raw)
+
+    pc = {"max_positions": 2, "alloc_pct": 20, "rank_lookback": 21}
+    ex = trader.run_broker_cycle(broker, svc, list(histories), pc, {})
+    bought = [e["asset"] for e in ex if e["side"] == "ACHAT"]
+    assert "STRONG" in bought and "MID" in bought   # les 2 plus fortes
+    assert "WEAK" not in bought                       # la plus faible écartée (place limitée)

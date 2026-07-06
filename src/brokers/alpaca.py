@@ -32,7 +32,8 @@ def to_alpaca_symbol(raw: str) -> str | None:
     if a.klass == "CRYPTO":
         return f"{a.symbol}/USD"
     if a.klass == "STOCK" and "." not in a.symbol:   # US uniquement (exclut .PA, .DE…)
-        return a.symbol
+        # Actions à classes : Yahoo écrit BRK-B, Alpaca attend BRK.B.
+        return a.symbol.replace("-", ".")
     return None
 
 

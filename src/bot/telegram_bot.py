@@ -1041,8 +1041,8 @@ def _alpaca_auto_text(db) -> str:
     if configured:
         setup = (
             "✅ *Clés Alpaca configurées.*\n"
-            "Le bot applique sa stratégie *directement sur ton compte* toutes les heures "
-            "(il passe les ordres seul).\n\n"
+            "Le bot scanne *tout le S&P 500* (500 actions US) toutes les heures et achète "
+            "les plus fortes du moment (classement momentum), directement sur ton compte.\n\n"
             "_Changer les clés : `/set ALPACA_API_KEY_ID …` · Retirer : `/del ALPACA_API_KEY_ID`_"
         )
     else:
@@ -1083,7 +1083,7 @@ async def alpaca_auto_job(context: ContextTypes.DEFAULT_TYPE):
             break
     try:
         executed = await asyncio.to_thread(
-            trader.run_broker_cycle, broker, svc, _universe(), _paper_cfg(), params)
+            trader.run_broker_cycle, broker, svc, _alpaca_universe(), _paper_cfg(), params)
     except Exception as e:  # noqa: BLE001
         log.warning("Alpaca auto cycle : %s", e)
         return
@@ -1327,6 +1327,14 @@ def _universe() -> list[str]:
         if u:
             return u
     return _universe()
+
+
+def _alpaca_universe() -> list[str]:
+    """Univers du trading autonome Alpaca : TOUT le S&P 500 (500 actions US) + les cryptos
+    de la watchlist. Le bot scanne tout et achète les plus fortes (classement momentum)."""
+    from ..universe_us import us_trading_universe
+    extra = [a for a in _universe() if a.startswith("CRYPTO:")]
+    return us_trading_universe(extra)
 
 
 async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
