@@ -699,8 +699,12 @@ async def ia_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
                                     reply_markup=_ia_keyboard(db))
 
 
-async def _ia_ask_and_send(chat_id, context, source: str = "live"):
-    """Construit le contexte, appelle OpenAI (si quota/positions OK) et envoie l'avis."""
+async def _ia_ask_and_send(chat_id, context, source: str = "manuel"):
+    """Construit le contexte, appelle OpenAI et envoie l'avis (+ exécution des ordres).
+
+    source="daily" (consultation automatique) : limitée à 1/jour (budget tokens).
+    source="manuel" (bouton) : illimité, protégé d'un double-clic accidentel.
+    """
     from .. import ai_advisor as ai
     from ..formatting import esc_md
     db = _db(context)
@@ -708,8 +712,6 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
     if not ai.is_configured():
         return await context.bot.send_message(
             chat_id, "❌ Clé OpenAI absente. Configure-la : `/set OPENAI_API_KEY ta-clé`", parse_mode=MD)
-    # Seule la consultation AUTOMATIQUE (daily) est limitée à 1/jour. Le bouton manuel
-    # est illimité (juste protégé d'un double-clic accidentel).
     manual = source != "daily"
     if not manual and not ai.can_call(db):
         return await context.bot.send_message(
@@ -718,10 +720,6 @@ async def _ia_ask_and_send(chat_id, context, source: str = "live"):
     if manual and not ai.manual_ready(db):
         return await context.bot.send_message(
             chat_id, "⏳ Tu viens de lancer une demande — patiente ~1 min avant d'en relancer une.")
-    positions = db.paper_positions(chat_id)
-    if source == "live" and not positions:
-        return await context.bot.send_message(
-            chat_id, "📭 Aucune position en cours → pas de requête envoyée (économie du quota).")
     msg = await context.bot.send_message(chat_id, "🧠 J'agrège le contexte et j'interroge l'IA…")
     try:
         ctx_text = await asyncio.to_thread(ai.build_context, svc, db, chat_id, _universe())
@@ -1340,7 +1338,7 @@ def _universe() -> list[str]:
         u = _DB_REF.get_universe()
         if u:
             return u
-    return _universe()
+    return list(CONFIG.get("univers_scan", []))
 
 
 def _alpaca_universe() -> list[str]:
@@ -1427,15 +1425,16 @@ async def simuler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _ia_sim_comment(chat_id, context, r):
-    """Avis IA sur les résultats de simulation (si activé) — mêmes limites (1/jour)."""
+    """Avis IA sur les résultats de simulation (si activé) — déclenché par l'utilisateur,
+    donc hors quota quotidien (seul l'anti-double-clic s'applique)."""
     from .. import ai_advisor as ai
     from ..formatting import esc_md
     db = _db(context)
     if db.get_config("AI_SIM_ENABLED") != "1" or not ai.is_configured():
         return
-    if not ai.can_call(db):
+    if not ai.manual_ready(db):
         return await context.bot.send_message(
-            chat_id, "🧠 Avis IA sur la simulation : quota du jour déjà utilisé (1/jour).")
+            chat_id, "🧠 Avis IA : une demande vient d'être lancée — patiente ~1 min.")
     try:
         cfgp = _paper_cfg()
         ctx = (f"MODE: SIMULATEUR (backtest paper-trading). "
@@ -1450,7 +1449,7 @@ async def _ia_sim_comment(chat_id, context, r):
         advice = await asyncio.to_thread(
             ai.ask, ctx, "Analyse ces résultats de backtest : forces, faiblesses, et 2-3 pistes "
                          "concrètes pour améliorer le rendement (profil agressif).")
-        ai.record_call(db)
+        ai.record_manual(db)
         db.log_event(chat_id, "ai_call", "source=simulation")
         await context.bot.send_message(
             chat_id, f"🧠 *Avis IA sur la simulation*\n\n{esc_md(advice)[:3800]}", parse_mode=MD)
