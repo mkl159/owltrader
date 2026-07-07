@@ -147,3 +147,30 @@ def test_run_broker_cycle_ranks_by_momentum(monkeypatch):
     bought = [e["asset"] for e in ex if e["side"] == "ACHAT"]
     assert "STRONG" in bought and "MID" in bought   # les 2 plus fortes
     assert "WEAK" not in bought                       # la plus faible écartée (place limitée)
+
+
+def test_us_trading_universe_override_and_fetch_guards(monkeypatch):
+    """La liste stockée (mise à jour hebdo) prime sur la liste figée ; fetch rejette l'anormal."""
+    from src import universe_us as uu
+
+    # Override : la liste à jour remplace la figée, extra dédoublonné
+    out = uu.us_trading_universe(["CRYPTO:BTC", "STOCK:AAA"], symbols=["AAA", "BBB"])
+    assert out == ["STOCK:AAA", "STOCK:BBB", "CRYPTO:BTC"]
+    # Sans override : liste figée
+    assert len(uu.us_trading_universe()) == len(uu.SP500)
+
+    # Garde-fous de fetch_sp500 : liste trop courte ou symbole invalide -> None
+    class FakeResp:
+        def __init__(self, text): self.text = text
+        def raise_for_status(self): pass
+    import requests
+    monkeypatch.setattr(requests, "get",
+                        lambda *a, **k: FakeResp("Symbol\nAAPL\nMSFT\n"))
+    assert uu.fetch_sp500() is None          # 2 valeurs : anormal, rejeté
+    bad = "Symbol\n" + "\n".join(f"T{i}" for i in range(460)) + "\n$INVALID!\n"
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp(bad))
+    assert uu.fetch_sp500() is None          # symbole invalide : rejeté
+    good = "Symbol\n" + "\n".join(f"T{i}" for i in range(460))
+    monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp(good))
+    got = uu.fetch_sp500()
+    assert got is not None and len(got) == 460

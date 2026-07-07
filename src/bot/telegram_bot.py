@@ -1072,6 +1072,35 @@ def _alpaca_auto_text(db) -> str:
     )
 
 
+async def universe_refresh_job(context: ContextTypes.DEFAULT_TYPE):
+    """Met à jour chaque semaine la liste des actions du S&P 500 (entrées/sorties d'indice).
+
+    Télécharge les constituants à jour ; en cas d'échec ou de liste anormale, on garde
+    l'ancienne (aucun risque). Prévient l'utilisateur seulement s'il y a du changement.
+    """
+    from ..universe_us import SP500, fetch_sp500
+    db: Storage = context.application.bot_data["db"]
+    fresh = await asyncio.to_thread(fetch_sp500)
+    if not fresh:
+        log.warning("Univers S&P 500 : téléchargement impossible, liste actuelle conservée.")
+        return
+    stored = db.get_config("SP500_LIST")
+    old = set(stored.split()) if stored else set(SP500)
+    added, removed = sorted(set(fresh) - old), sorted(old - set(fresh))
+    db.set_config("SP500_LIST", " ".join(fresh))
+    log.info("Univers S&P 500 rafraîchi : %d valeurs (+%d/-%d).", len(fresh), len(added), len(removed))
+    if not (added or removed):
+        return
+    txt = (f"🔄 *Univers S&P 500 mis à jour* ({len(fresh)} actions suivies)\n"
+           + (f"➕ Entrées : {', '.join(added[:15])}\n" if added else "")
+           + (f"➖ Sorties : {', '.join(removed[:15])}" if removed else "")).strip()
+    for cid in db.all_authorized():
+        try:
+            await context.bot.send_message(cid, txt, parse_mode=MD)
+        except Exception:  # noqa: BLE001
+            pass
+
+
 async def alpaca_auto_job(context: ContextTypes.DEFAULT_TYPE):
     """Cycle de trading autonome sur Alpaca (si activé paper/live)."""
     import json as _json
@@ -1343,10 +1372,15 @@ def _universe() -> list[str]:
 
 def _alpaca_universe() -> list[str]:
     """Univers du trading autonome Alpaca : TOUT le S&P 500 (500 actions US) + les cryptos
-    de la watchlist. Le bot scanne tout et achète les plus fortes (classement momentum)."""
+    de la watchlist. Le bot scanne tout et achète les plus fortes (classement momentum).
+
+    La liste des 500 est rafraîchie chaque semaine (universe_refresh_job) et stockée en
+    base ; la liste figée du code sert de secours."""
     from ..universe_us import us_trading_universe
+    stored = _DB_REF.get_config("SP500_LIST") if _DB_REF is not None else None
+    symbols = stored.split() if stored else None
     extra = [a for a in _universe() if a.startswith("CRYPTO:")]
-    return us_trading_universe(extra)
+    return us_trading_universe(extra, symbols=symbols)
 
 
 async def auto(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2246,4 +2280,6 @@ def build_application() -> Application:
     app.job_queue.run_repeating(alerts_job, interval=auto_min * 60, first=60)
     # Trading autonome sur Alpaca (si activé paper/live) — toutes les heures
     app.job_queue.run_repeating(alpaca_auto_job, interval=3600, first=150)
+    # Mise à jour hebdo de la liste S&P 500 (entrées/sorties d'indice) + 1er passage au boot
+    app.job_queue.run_repeating(universe_refresh_job, interval=7 * 24 * 3600, first=120)
     return app

@@ -58,13 +58,44 @@ SP500 = [
 ]
 
 
-def us_trading_universe(extra: list[str] | None = None) -> list[str]:
+# Source publique des constituants à jour (dataset maintenu, format CSV stable).
+SP500_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/main/data/constituents.csv"
+
+
+def fetch_sp500() -> list[str] | None:
+    """Télécharge la liste À JOUR des constituants du S&P 500 (None si échec/anormal).
+
+    Garde-fous : une liste tronquée ou farfelue (moins de 450 ou plus de 550 valeurs,
+    symboles invalides) est rejetée — on garde alors la liste précédente.
+    """
+    import csv
+    import io
+
+    import requests
+    try:
+        r = requests.get(SP500_URL, timeout=20)
+        r.raise_for_status()
+        rows = csv.DictReader(io.StringIO(r.text))
+        syms = sorted({row["Symbol"].strip().replace(".", "-")
+                       for row in rows if row.get("Symbol", "").strip()})
+    except Exception:  # noqa: BLE001
+        return None
+    if not (450 <= len(syms) <= 550):
+        return None
+    if not all(s.replace("-", "").isalnum() for s in syms):
+        return None
+    return syms
+
+
+def us_trading_universe(extra: list[str] | None = None,
+                        symbols: list[str] | None = None) -> list[str]:
     """Univers de trading autonome Alpaca : S&P 500 (STOCK:*) + éventuels actifs en plus.
 
-    `extra` = actifs de la watchlist utilisateur déjà tradables Alpaca (ex. cryptos
-    BTC/ETH) qu'on veut aussi suivre. Dédoublonné en gardant l'ordre.
+    `symbols` = liste de tickers à jour (mise à jour hebdo stockée en base) ; à défaut,
+    la liste figée SP500 sert de secours. `extra` = actifs de la watchlist utilisateur
+    déjà tradables Alpaca (ex. cryptos BTC/ETH). Dédoublonné en gardant l'ordre.
     """
-    out = [f"STOCK:{t}" for t in SP500]
+    out = [f"STOCK:{t}" for t in (symbols or SP500)]
     seen = set(out)
     for a in extra or []:
         if a not in seen:
