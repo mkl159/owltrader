@@ -71,6 +71,7 @@ paper:
   rank_lookback: 21      # achats classés par momentum 1 mois (force relative ; +Sharpe, -drawdown)
   abs_mom_lookback: 126  # momentum absolu (Antonacci) : pas d'achat si baisse sur ~6 mois
   abs_mom_min: 0.0       # seuil (0 = refuser le momentum 6 mois négatif)
+  ia_hold_days: 7        # anti-bagotement : les achats du conseiller IA sont protégés N jours du cycle autonome
 
 # Moteur de signaux
 signaux:

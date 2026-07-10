@@ -23,6 +23,63 @@ def strat_params(params: dict | None) -> dict:
     return {k: params[k] for k in _STRAT_KEYS if k in params}
 
 
+# --- Protection des achats IA (anti-bagotement) -----------------------------------
+# L'IA (agressive, court terme) et la stratégie de tendance (lente) peuvent se
+# contredire : l'IA achète, et au cycle suivant la stratégie revend faute de signal.
+# Règle : une position ouverte par l'IA est INTOUCHABLE par le cycle autonome pendant
+# `ia_hold_days` jours — seule l'IA (ordre SELL) ou le stop-loss peuvent la fermer.
+
+def _ai_hold_key(scope: str) -> str:
+    return f"AI_HOLDINGS_{scope}"
+
+
+def _ai_holdings(db, scope: str) -> dict:
+    """{symbole: date ISO d'achat} des positions ouvertes par l'IA."""
+    if db is None:
+        return {}
+    try:
+        raw = db.get_config(_ai_hold_key(scope))
+        return json.loads(raw) if raw else {}
+    except Exception:  # noqa: BLE001
+        return {}
+
+
+def ai_mark_held(db, scope: str, symbol: str):
+    from datetime import datetime, timezone
+    if db is None:
+        return
+    d = _ai_holdings(db, scope)
+    d[symbol] = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    db.set_config(_ai_hold_key(scope), json.dumps(d))
+
+
+def ai_unmark_held(db, scope: str, symbol: str):
+    if db is None:
+        return
+    d = _ai_holdings(db, scope)
+    if symbol in d:
+        del d[symbol]
+        db.set_config(_ai_hold_key(scope), json.dumps(d))
+
+
+def ai_protected(db, scope: str, paper_cfg: dict) -> set[str]:
+    """Symboles encore sous protection IA (achat plus récent que ia_hold_days)."""
+    from datetime import datetime, timedelta, timezone
+    days = int(paper_cfg.get("ia_hold_days", 7) or 0)
+    if days <= 0:
+        return set()
+    d = _ai_holdings(db, scope)
+    now = datetime.now(timezone.utc)
+    out = set()
+    for sym, ts in d.items():
+        try:
+            if now - datetime.fromisoformat(ts).replace(tzinfo=timezone.utc) <= timedelta(days=days):
+                out.add(sym)
+        except ValueError:
+            continue
+    return out
+
+
 def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> list[dict]:
     """Exécute un cycle de décision pour un compte. Renvoie la liste des trades effectués."""
     acc = db.paper_get(chat_id)
@@ -70,6 +127,9 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     cash = acc["cash"]
     held = {p["asset"]: p for p in db.paper_positions(chat_id)}
     executed: list[dict] = []
+    # Positions ouvertes par l'IA : le cycle ne les revend pas pendant ia_hold_days
+    # (anti-bagotement) — mais le STOP-LOSS garde toujours la priorité (risque d'abord).
+    protected = ai_protected(db, f"paper_{chat_id}", paper_cfg)
 
     # --- VENTES : la stratégie n'en veut plus OU stop-loss du risk manager ---
     for a, p in list(held.items()):
@@ -77,6 +137,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
             continue
         price = prices[a]
         stop_hit = sl > 0 and price <= p["entry_price"] * (1 - sl)
+        if a in protected and not stop_hit:
+            continue  # position IA récente : seule l'IA (ou le stop-loss) la ferme
         if not wants.get(a, False) or stop_hit:
             qty = p["quantity"]
             gross = qty * price
@@ -85,6 +147,7 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
             pnl = (price - p["entry_price"]) * qty - fee - p["entry_fee"]
             db.paper_remove_position(chat_id, a)
             db.paper_record_trade(chat_id, a, "VENTE", qty, price, fee, pnl)
+            ai_unmark_held(db, f"paper_{chat_id}", a)
             executed.append({"side": "VENTE", "asset": a, "quantity": qty, "price": price,
                              "fee": fee, "pnl": pnl,
                              "motif": "stop-loss" if stop_hit else "signal"})
@@ -177,6 +240,7 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
         pnl = (price - p["entry_price"]) * qty - fee - p["entry_fee"]
         db.paper_remove_position(chat_id, asset)
         db.paper_record_trade(chat_id, asset, "VENTE", qty, price, fee, pnl)
+        ai_unmark_held(db, f"paper_{chat_id}", asset)
         executed.append({"side": "VENTE", "asset": asset, "quantity": qty, "price": price,
                          "fee": fee, "pnl": pnl, "motif": "ordre IA"})
         del held[asset]
@@ -214,6 +278,7 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
         cash -= gross + fee
         db.paper_add_position(chat_id, asset, qty, price, fee)
         db.paper_record_trade(chat_id, asset, "ACHAT", qty, price, fee, 0.0)
+        ai_mark_held(db, f"paper_{chat_id}", asset)
         executed.append({"side": "ACHAT", "asset": asset, "quantity": qty, "price": price,
                          "fee": fee, "pnl": 0.0,
                          "motif": "découverte IA (actus)" if discovered else "ordre IA"})
@@ -223,11 +288,14 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
     return executed
 
 
-def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> list[dict]:
+def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict,
+                          db=None) -> list[dict]:
     """Exécute les ordres du conseiller IA sur le compte Alpaca (paper ou live).
 
     L'IA peut proposer n'importe quel actif ; seuls ceux tradables chez Alpaca (actions US
     + crypto) sont exécutés. Les autres (Paris, indices…) sont ignorés proprement.
+    Chaque ACHAT est marqué « position IA » : le cycle autonome ne pourra pas la revendre
+    pendant ia_hold_days (anti-bagotement) ; un SELL de l'IA lève la protection.
     """
     from ..brokers.alpaca import to_alpaca_symbol
     alloc = paper_cfg.get("alloc_pct", 20)
@@ -243,6 +311,7 @@ def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> l
             continue
         try:
             broker.submit_order(sym, abs(positions[sym]["qty"]), "sell")
+            ai_unmark_held(db, "alpaca", sym)
             executed.append({"side": "VENTE", "asset": sym, "quantity": positions[sym]["qty"],
                              "price": positions[sym].get("avg_entry_price", 0), "fee": 0.0,
                              "pnl": 0.0, "motif": "ordre IA"})
@@ -261,6 +330,7 @@ def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> l
             continue
         try:
             broker.submit_order(sym, qty, "buy")
+            ai_mark_held(db, "alpaca", sym)
             cash -= qty * q.price
             executed.append({"side": "ACHAT", "asset": sym, "quantity": qty, "price": q.price,
                              "fee": 0.0, "pnl": 0.0, "motif": "ordre IA"})
@@ -269,7 +339,8 @@ def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict) -> l
     return executed
 
 
-def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: dict) -> list[dict]:
+def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: dict,
+                     db=None) -> list[dict]:
     """Applique la stratégie du bot sur un VRAI broker (Alpaca) : achète/vend en autonome.
 
     Mêmes règles que le mode autonome interne (`run_cycle`) : décision de tendance,
@@ -336,11 +407,16 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             paused = True
 
     executed: list[dict] = []
+    # Positions ouvertes par l'IA : intouchables pendant ia_hold_days (anti-bagotement).
+    protected = ai_protected(db, "alpaca", paper_cfg)
     # VENTES : positions détenues que la stratégie ne veut plus (et sans ordre en attente).
     for sym, p in positions.items():
+        if sym in protected:
+            continue  # position IA récente : seule l'IA décide de la vendre
         if sym not in wants and sym not in pending:
             try:
                 broker.submit_order(sym, abs(p["qty"]), "sell")
+                ai_unmark_held(db, "alpaca", sym)   # protection expirée : on nettoie
                 executed.append({"side": "VENTE", "asset": sym, "quantity": p["qty"],
                                  "price": p.get("avg_entry_price", 0), "fee": 0.0,
                                  "pnl": 0.0, "motif": "broker"})

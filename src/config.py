@@ -56,6 +56,9 @@ DEFAULTS = {
         # Validé robuste 5 ET 10 ans (n'a jamais nui). 126j ≈ 6 mois.
         "abs_mom_lookback": 126,
         "abs_mom_min": 0.0,
+        # Anti-bagotement IA/stratégie : une position achetée par le conseiller IA ne peut
+        # pas être revendue par le cycle autonome pendant N jours (stop-loss prioritaire).
+        "ia_hold_days": 7,
     },
     "signaux": {
         "rsi_survente": 30,

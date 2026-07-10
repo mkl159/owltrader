@@ -174,3 +174,66 @@ def test_us_trading_universe_override_and_fetch_guards(monkeypatch):
     monkeypatch.setattr(requests, "get", lambda *a, **k: FakeResp(good))
     got = uu.fetch_sp500()
     assert got is not None and len(got) == 460
+
+
+def test_ai_buy_protected_from_autonomous_cycle():
+    """Anti-bagotement : l'IA achète -> le cycle autonome ne revend PAS pendant ia_hold_days."""
+    from unittest.mock import MagicMock
+
+    import numpy as np
+    import pandas as pd
+
+    from src.paper import trader
+
+    class FakeDB:                                # kv minimal en mémoire
+        def __init__(self): self.kv = {}
+        def get_config(self, k): return self.kv.get(k)
+        def set_config(self, k, v): self.kv[k] = v
+
+    db = FakeDB()
+    # 1) L'IA achète HOOD sur Alpaca
+    broker = MagicMock()
+    broker.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+    broker.get_positions.return_value = []
+    broker.get_open_orders.return_value = []
+    svc = MagicMock()
+    qq = MagicMock(); qq.price = 100.0
+    svc.quote.return_value = qq
+    ex = trader.execute_orders_alpaca(
+        broker, svc, [{"action": "BUY", "asset": "STOCK:HOOD"}], {"alloc_pct": 20}, db)
+    assert [e["side"] for e in ex] == ["ACHAT"]
+    assert "HOOD" in trader.ai_protected(db, "alpaca", {"ia_hold_days": 7})
+
+    # 2) Une heure après, le cycle autonome tourne : la stratégie ne veut PAS HOOD
+    #    (série baissière) -> sans protection il vendrait ; avec, il NE VEND PAS.
+    idx = pd.date_range("2019-01-01", periods=400, freq="D", tz="UTC")
+    rng = np.random.default_rng(2)
+    close = 100 * np.cumprod(1 - 0.0015 + rng.normal(0, 0.01, 400))
+    down = pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99,
+                         "close": close, "volume": 1000.0}, index=idx)
+    broker2 = MagicMock()
+    broker2.get_account.return_value = {"equity": 10000, "cash": 8000, "currency": "USD"}
+    broker2.get_positions.return_value = [{"symbol": "HOOD", "qty": 20, "avg_entry_price": 100}]
+    broker2.get_open_orders.return_value = []
+    svc2 = MagicMock()
+    svc2.fetch_histories.side_effect = lambda uni, period="1y": {"STOCK:HOOD": down}
+    svc2.history.side_effect = lambda raw, period="1y": down
+    ex2 = trader.run_broker_cycle(broker2, svc2, ["STOCK:HOOD"],
+                                  {"max_positions": 5, "alloc_pct": 20, "ia_hold_days": 7}, {}, db)
+    assert not [e for e in ex2 if e["side"] == "VENTE"]      # position IA protégée
+    assert not broker2.submit_order.called
+
+    # 3) Protection expirée (ia_hold_days=0) -> le cycle reprend la main et vend
+    ex3 = trader.run_broker_cycle(broker2, svc2, ["STOCK:HOOD"],
+                                  {"max_positions": 5, "alloc_pct": 20, "ia_hold_days": 0}, {}, db)
+    assert [e["side"] for e in ex3] == ["VENTE"]
+
+    # 4) Un SELL de l'IA lève la protection
+    trader.ai_mark_held(db, "alpaca", "HOOD")
+    broker3 = MagicMock()
+    broker3.get_account.return_value = {"equity": 10000, "cash": 8000, "currency": "USD"}
+    broker3.get_positions.return_value = [{"symbol": "HOOD", "qty": 20, "avg_entry_price": 100}]
+    broker3.get_open_orders.return_value = []
+    trader.execute_orders_alpaca(
+        broker3, svc, [{"action": "SELL", "asset": "STOCK:HOOD"}], {"alloc_pct": 20}, db)
+    assert "HOOD" not in trader.ai_protected(db, "alpaca", {"ia_hold_days": 7})

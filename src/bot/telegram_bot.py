@@ -743,7 +743,7 @@ async def _ia_ask_and_send(chat_id, context, source: str = "manuel"):
                 def _exec_alpaca():
                     from ..brokers.alpaca import AlpacaBroker
                     b = AlpacaBroker(mode=alpaca_mode)
-                    return trader.execute_orders_alpaca(b, svc, orders, _paper_cfg())
+                    return trader.execute_orders_alpaca(b, svc, orders, _paper_cfg(), db)
                 try:
                     executed = await asyncio.to_thread(_exec_alpaca)
                 except Exception as e:  # noqa: BLE001
@@ -1124,7 +1124,7 @@ async def alpaca_auto_job(context: ContextTypes.DEFAULT_TYPE):
             break
     try:
         executed = await asyncio.to_thread(
-            trader.run_broker_cycle, broker, svc, _alpaca_universe(), _paper_cfg(), params)
+            trader.run_broker_cycle, broker, svc, _alpaca_universe(), _paper_cfg(), params, db)
     except Exception as e:  # noqa: BLE001
         log.warning("Alpaca auto cycle : %s", e)
         return
