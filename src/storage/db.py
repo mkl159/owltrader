@@ -216,6 +216,19 @@ class Storage:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def paper_perf_by_asset(self, chat_id: int) -> list[tuple[str, float, int]]:
+        """P&L réalisé cumulé par actif (sur les ventes), du meilleur au pire.
+
+        Inspiré du /performance de freqtrade : montre QUELS actifs rapportent.
+        """
+        with self._conn() as c:
+            rows = c.execute(
+                "SELECT asset, COALESCE(SUM(pnl),0), COUNT(*) FROM paper_trades "
+                "WHERE chat_id=? AND side='VENTE' GROUP BY asset ORDER BY SUM(pnl) DESC",
+                (chat_id,),
+            ).fetchall()
+        return [(r[0], float(r[1]), int(r[2])) for r in rows]
+
     def paper_record_equity(self, chat_id: int, equity: float):
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         with self._conn() as c:

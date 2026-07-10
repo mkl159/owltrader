@@ -111,6 +111,10 @@ HELP = (
     "💼 *Portefeuille*\n"
     "• /ajouter `AAPL 10 180` — qté, prix d'achat\n"
     "• /portefeuille · /perf\n\n"
+    "🚨 *Urgence & reporting trading*\n"
+    "• /stopachats — suspendre tous les achats (ventes actives) · /reprendre\n"
+    "• /toutvendre — liquider TOUTES les positions (avec confirmation)\n"
+    "• /paractif — P&L réalisé par actif · /jours — gains/pertes par jour\n\n"
     "🧠 *Conseiller IA (facultatif)*\n"
     "• /ia — avis OpenAI acheter/vendre (1 req/jour, activable/désactivable)\n\n"
     "🔌 *Connecteurs & sauvegarde*\n"
@@ -141,6 +145,10 @@ HELP_EN = (
     "• /alerte `AAPL 200` · /alertes · /univers · /sources\n\n"
     "👁️ *Watchlist* : /watch · /unwatch · /liste\n"
     "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
+    "🚨 *Emergency & trading reports*\n"
+    "• /pause — stop all buying (sells stay active) · /resume\n"
+    "• /panic — liquidate ALL positions (with confirmation)\n"
+    "• /performance — realized P&L per asset · /daily — daily P&L\n\n"
     "🧠 *AI advisor (optional)*\n"
     "• /ia — OpenAI buy/sell advice (1 req/day, toggleable)\n\n"
     "🔌 *Connectors & backup*\n"
@@ -1628,6 +1636,116 @@ async def perf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_perf(update.effective_chat.id, context, update.message.reply_text)
 
 
+# --- Commandes inspirées de freqtrade (bot Telegram de référence, 40k ⭐) ---
+
+async def stopachats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🛑 Pause d'urgence (équiv. /stopentry freqtrade) : plus aucun achat, ventes actives."""
+    db = _db(context)
+    db.set_config("TRADING_PAUSED", "1")
+    db.log_event(update.effective_chat.id, "pause", "stopachats")
+    await update.message.reply_text(
+        "🛑 *Achats suspendus* (autonome, Alpaca ET conseiller IA).\n"
+        "Les ventes et stop-loss restent actifs pour protéger tes positions.\n"
+        "Reprendre : /reprendre · Tout liquider : /toutvendre", parse_mode=MD)
+
+
+async def reprendre(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """▶️ Lève la pause d'urgence : le trading reprend normalement."""
+    db = _db(context)
+    db.set_config("TRADING_PAUSED", "0")
+    db.log_event(update.effective_chat.id, "pause", "reprise")
+    await update.message.reply_text("▶️ *Trading repris* — le bot achète de nouveau selon sa stratégie.",
+                                    parse_mode=MD)
+
+
+async def toutvendre(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🚨 Liquidation totale (équiv. /forceexit all freqtrade) — avec confirmation."""
+    await update.message.reply_text(
+        "🚨 *Tout vendre ?* Cette action liquide TOUTES les positions (compte fictif interne "
+        "et Alpaca si connecté) puis suspend les achats.\n_Les ordres partent au marché._",
+        parse_mode=MD,
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("✅ Oui, tout vendre", callback_data="sellall:yes"),
+            InlineKeyboardButton("❌ Annuler", callback_data="sellall:no"),
+        ]]))
+
+
+async def _sell_everything(chat_id: int, context) -> list[str]:
+    """Vend toutes les positions (interne + Alpaca) et suspend les achats. Renvoie le compte-rendu."""
+    db, svc = _db(context), _svc(context)
+    db.set_config("TRADING_PAUSED", "1")   # freqtrade : stopentry d'abord, forceexit ensuite
+    lines: list[str] = []
+    # Compte fictif interne : un ordre SELL par position (frais inclus, via le moteur normal)
+    held = db.paper_positions(chat_id)
+    if held:
+        orders = [{"action": "SELL", "asset": p["asset"]} for p in held]
+        done = await asyncio.to_thread(
+            trader.execute_orders, db, svc, chat_id, orders, _paper_cfg(), _universe())
+        for tr in done:
+            lines.append(f"🔴 VENTE {tr['asset']} × {tr['quantity']:g} (P&L {tr['pnl']:+.2f})")
+    # Alpaca (paper/live) si connecté
+    mode = db.get_config("ALPACA_AUTO")
+    if mode in ("paper", "live"):
+        def _liquidate():
+            from ..brokers.alpaca import AlpacaBroker
+            b = AlpacaBroker(mode=mode)
+            out = []
+            pending = set(b.get_open_orders())
+            for p in b.get_positions():
+                if p["symbol"] in pending:
+                    continue
+                try:
+                    b.submit_order(p["symbol"], abs(p["qty"]), "sell")
+                    out.append(f"🦙 VENTE {p['symbol']} × {p['qty']:g}")
+                except Exception as e:  # noqa: BLE001
+                    out.append(f"⚠️ {p['symbol']} : {str(e)[:60]}")
+            return out
+        try:
+            lines += await asyncio.to_thread(_liquidate)
+        except Exception as e:  # noqa: BLE001
+            lines.append(f"⚠️ Alpaca injoignable : {str(e)[:80]}")
+    db.log_event(chat_id, "sellall", f"{len(lines)} ordres")
+    return lines
+
+
+async def paractif(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📊 P&L réalisé par actif (équiv. /performance freqtrade) : qui te fait gagner ?"""
+    db = _db(context)
+    rows = db.paper_perf_by_asset(update.effective_chat.id)
+    if not rows:
+        return await update.message.reply_text(
+            "📊 Aucune vente enregistrée pour l'instant — le classement par actif "
+            "apparaîtra après les premiers trades bouclés.")
+    dev = _paper_cfg().get("devise", "EUR")
+    lines = ["📊 *P&L réalisé par actif* (ventes bouclées)"]
+    for asset, pnl, n in rows[:15]:
+        ic = "🟢" if pnl >= 0 else "🔴"
+        lines.append(f"{ic} {asset} : *{pnl:+.2f} {dev}* ({n} vente{'s' if n > 1 else ''})")
+    total = sum(p for _, p, _ in rows)
+    lines.append(f"\nΣ Total réalisé : *{total:+.2f} {dev}*")
+    await update.message.reply_text("\n".join(lines), parse_mode=MD)
+
+
+async def jours(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """📅 P&L par jour sur ~7 jours (équiv. /daily freqtrade), depuis la courbe d'équity."""
+    db = _db(context)
+    curve = db.paper_equity_curve(update.effective_chat.id)
+    if len(curve) < 2:
+        return await update.message.reply_text(
+            "📅 Pas encore assez d'historique (il faut au moins 2 jours d'activité).")
+    dev = _paper_cfg().get("devise", "EUR")
+    lines = ["📅 *Gains/pertes par jour*"]
+    prev = None
+    for day, eq in curve[-8:]:
+        if prev is not None:
+            d = eq - prev
+            ic = "🟢" if d >= 0 else "🔴"
+            lines.append(f"{ic} {day} : {d:+.2f} {dev}")
+        prev = eq
+    lines.append(f"\n💼 Équity actuelle : {curve[-1][1]:.2f} {dev}")
+    await update.message.reply_text("\n".join(lines), parse_mode=MD)
+
+
 async def reglages(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     s = _db(context).get_settings(chat_id)
@@ -1847,6 +1965,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"• {p['symbol']} : {p['qty']:g}")
         return await q.edit_message_text("\n".join(lines), parse_mode=MD,
                                          reply_markup=back_button("brokers_menu"))
+    if data.startswith("sellall:"):
+        if data.split(":", 1)[1] != "yes":
+            return await q.edit_message_text("❌ Liquidation annulée — rien n'a été vendu.")
+        await q.edit_message_text("🚨 Liquidation en cours…")
+        lines = await _sell_everything(chat_id, context)
+        txt = ("🚨 *Liquidation terminée* — achats suspendus (/reprendre pour relancer)\n"
+               + ("\n".join(lines[:25]) if lines else "Aucune position à vendre."))
+        return await q.edit_message_text(txt, parse_mode=MD)
     if data == "alpaca_panel":
         return await q.edit_message_text(_alpaca_auto_text(db), parse_mode=MD,
                                          reply_markup=_alpaca_auto_keyboard(db))
@@ -2260,6 +2386,12 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ajouter", ajouter))
     app.add_handler(CommandHandler("portefeuille", portefeuille))
     app.add_handler(CommandHandler("perf", perf))
+    # Commandes façon freqtrade : urgence + reporting
+    app.add_handler(CommandHandler(["stopachats", "pause"], stopachats))
+    app.add_handler(CommandHandler(["reprendre", "resume"], reprendre))
+    app.add_handler(CommandHandler(["toutvendre", "panic"], toutvendre))
+    app.add_handler(CommandHandler(["paractif", "performance"], paractif))
+    app.add_handler(CommandHandler(["jours", "daily"], jours))
     app.add_handler(CommandHandler("reglages", reglages))
     app.add_handler(CommandHandler(["langue", "language", "lang"], langue_cmd))
     app.add_handler(CommandHandler("digest", digest_cmd))

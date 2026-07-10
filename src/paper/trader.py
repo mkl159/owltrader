@@ -145,6 +145,15 @@ def _plan_directives(db) -> tuple[str, set[str], set[str]]:
             set(plan.get("focus", [])), set(plan.get("eviter", [])))
 
 
+def entries_paused(db) -> bool:
+    """Pause d'urgence (équivalent /stopentry de freqtrade) : plus AUCUN nouvel achat,
+    mais les ventes/stop-loss restent actifs. Persiste en base (survit au redémarrage)."""
+    try:
+        return db is not None and (db.get_config("TRADING_PAUSED") or "0") == "1"
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> list[dict]:
     """Exécute un cycle de décision pour un compte. Renvoie la liste des trades effectués."""
     acc = db.paper_get(chat_id)
@@ -234,8 +243,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
 
     # Plan IA 24h (osmose stratège/exécutant) : biais, priorités et interdits du chef de desk.
     bias, focus, avoid = _plan_directives(db)
-    if bias == "defensif":
-        paused = True   # l'IA a demandé la prudence : aucun nouvel achat pendant 24h
+    if bias == "defensif" or entries_paused(db):
+        paused = True   # prudence IA ou pause d'urgence : aucun nouvel achat
 
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
@@ -289,6 +298,8 @@ def execute_orders(db, svc, chat_id: int, orders: list[dict], paper_cfg: dict,
     acc = db.paper_get(chat_id)
     if not acc or not acc.get("active") or not orders:
         return []
+    if entries_paused(db):   # pause d'urgence : les achats IA aussi sont bloqués
+        orders = [o for o in orders if o.get("action") == "SELL"]
     fee_pct = paper_cfg.get("frais_pct", 0.20)
     fee_min = paper_cfg.get("frais_min", 1.0)
     max_pos = int(paper_cfg.get("max_positions", 5))
@@ -374,6 +385,8 @@ def execute_orders_alpaca(broker, svc, orders: list[dict], paper_cfg: dict,
     """
     from ..brokers.alpaca import to_alpaca_symbol
     alloc = paper_cfg.get("alloc_pct", 20)
+    if entries_paused(db):   # pause d'urgence : les achats IA aussi sont bloqués
+        orders = [o for o in orders if o.get("action") == "SELL"]
     acc = broker.get_account()
     equity, cash = acc.get("equity", 0.0), acc.get("cash", 0.0)
     positions = {p["symbol"]: p for p in broker.get_positions()}
@@ -509,8 +522,8 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
     bias, focus_raw, avoid_raw = _plan_directives(db)
     focus = {to_alpaca_symbol(a) for a in focus_raw} - {None}
     avoid = {to_alpaca_symbol(a) for a in avoid_raw} - {None}
-    if bias == "defensif":
-        paused = True   # l'IA a demandé la prudence : aucun nouvel achat pendant 24h
+    if bias == "defensif" or entries_paused(db):
+        paused = True   # prudence IA ou pause d'urgence : aucun nouvel achat
 
     # ACHATS : candidats voulus, filtrés momentum absolu, CLASSÉS par momentum relatif.
     free = 0 if paused else max_pos - len(positions)

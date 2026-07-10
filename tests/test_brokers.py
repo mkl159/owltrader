@@ -282,3 +282,59 @@ def test_decision_df_ignore_bougie_du_jour():
     idx2 = pd.date_range(end=hier, periods=100, freq="D", tz="UTC")
     df2 = pd.DataFrame({"close": np.linspace(100, 120, 100)}, index=idx2)
     assert len(decision_df(df2)) == 100                       # historique clos : intact
+
+
+def test_pause_urgence_bloque_achats_pas_ventes(monkeypatch):
+    """/stopachats (façon freqtrade /stopentry) : aucun achat (cycle + IA), ventes actives."""
+    from unittest.mock import MagicMock, patch
+
+    import numpy as np
+    import pandas as pd
+
+    import src.strategy as strategy_mod
+    from src.paper import trader
+
+    class FakeDB:
+        def __init__(self): self.kv = {"TRADING_PAUSED": "1"}
+        def get_config(self, k): return self.kv.get(k)
+        def set_config(self, k, v): self.kv[k] = v
+
+    db = FakeDB()
+    idx = pd.date_range("2019-01-01", periods=400, freq="D", tz="UTC")
+    rng = np.random.default_rng(1)
+    close = 100 + rng.normal(0.05, 0.5, 400).cumsum()
+    up = pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99,
+                       "close": close, "volume": 1000.0}, index=idx)
+    svc = MagicMock()
+    svc.fetch_histories.side_effect = lambda uni, period="1y": {"STOCK:AAA": up}
+    svc.history.side_effect = lambda raw, period="1y": up
+    qq = MagicMock(); qq.price = 100.0
+    svc.quote.return_value = qq
+
+    with patch.object(strategy_mod, "position_series",
+                      lambda df, **kw: pd.Series([1] * len(df), index=df.index)):
+        # Cycle autonome : la stratégie veut AAA, mais pause -> AUCUN achat
+        b = MagicMock()
+        b.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+        b.get_positions.return_value = []
+        b.get_open_orders.return_value = []
+        assert trader.run_broker_cycle(b, svc, ["STOCK:AAA"],
+                                       {"max_positions": 5, "alloc_pct": 20}, {}, db) == []
+        # Ordres IA : BUY filtré, SELL passe (protège les positions)
+        b2 = MagicMock()
+        b2.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+        b2.get_positions.return_value = [{"symbol": "AAA", "qty": 5, "avg_entry_price": 90}]
+        b2.get_open_orders.return_value = []
+        ex = trader.execute_orders_alpaca(
+            b2, svc, [{"action": "BUY", "asset": "STOCK:BBB"},
+                      {"action": "SELL", "asset": "STOCK:AAA"}], {"alloc_pct": 20}, db)
+        assert [e["side"] for e in ex] == ["VENTE"]
+        # Reprise -> les achats refonctionnent
+        db.set_config("TRADING_PAUSED", "0")
+        b3 = MagicMock()
+        b3.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+        b3.get_positions.return_value = []
+        b3.get_open_orders.return_value = []
+        ex3 = trader.run_broker_cycle(b3, svc, ["STOCK:AAA"],
+                                      {"max_positions": 5, "alloc_pct": 20}, {}, db)
+        assert [e["side"] for e in ex3] == ["ACHAT"]
