@@ -64,20 +64,86 @@ def test_max_tokens_invalide_retombe_sur_defaut():
 def test_parse_orders():
     txt = ('1) ACHETER AAPL...\n⚠️ Avis IA.\n'
            '{"orders":[{"action":"BUY","asset":"STOCK:AAPL"},{"action":"SELL","asset":"CRYPTO:BTC"}]}')
-    clean, orders = ai.parse_orders(txt)
+    clean, orders, plan = ai.parse_orders(txt)
     assert "orders" not in clean            # JSON retiré du texte affiché
     assert orders == [{"action": "BUY", "asset": "STOCK:AAPL"},
                       {"action": "SELL", "asset": "CRYPTO:BTC"}]
+    assert plan is None                     # pas de plan dans ce bloc
+
+
+def test_parse_orders_avec_plan():
+    txt = ('Avis...\n{"orders":[{"action":"BUY","asset":"STOCK:NVDA"}],'
+           '"plan":{"bias":"AGRESSIF","focus":["STOCK:NVDA","pasdeformat"],'
+           '"eviter":["STOCK:TSLA"],"note":"Déployer sur les semi-conducteurs."}}')
+    clean, orders, plan = ai.parse_orders(txt)
+    assert orders == [{"action": "BUY", "asset": "STOCK:NVDA"}]
+    assert plan == {"bias": "agressif", "focus": ["STOCK:NVDA"],
+                    "eviter": ["STOCK:TSLA"], "note": "Déployer sur les semi-conducteurs."}
+    # bias inconnu -> neutre
+    _, _, p2 = ai.parse_orders('{"orders":[],"plan":{"bias":"nimporte","focus":[],"eviter":[],"note":""}}')
+    assert p2["bias"] == "neutre"
 
 
 def test_parse_orders_sans_json():
-    clean, orders = ai.parse_orders("Aucun ordre aujourd'hui.")
-    assert orders == [] and "Aucun ordre" in clean
+    clean, orders, plan = ai.parse_orders("Aucun ordre aujourd'hui.")
+    assert orders == [] and plan is None and "Aucun ordre" in clean
 
 
 def test_parse_orders_json_invalide():
-    clean, orders = ai.parse_orders('bla {"orders": [pas du json]} bla')
-    assert orders == []
+    clean, orders, plan = ai.parse_orders('bla {"orders": [pas du json]} bla')
+    assert orders == [] and plan is None
+
+
+def test_plan_24h_guide_le_cycle_autonome():
+    """Osmose : bias défensif = aucun achat ; eviter exclu ; focus prioritaire."""
+    from unittest.mock import MagicMock
+
+    import numpy as np
+    import pandas as pd
+
+    import src.strategy as strategy_mod
+    from src.paper import trader
+
+    class FakeDB:
+        def __init__(self): self.kv = {}
+        def get_config(self, k): return self.kv.get(k)
+        def set_config(self, k, v): self.kv[k] = v
+
+    def series(seed):
+        idx = pd.date_range("2019-01-01", periods=400, freq="D", tz="UTC")
+        rng = np.random.default_rng(seed)
+        close = 100 + rng.normal(0.05, 0.5, 400).cumsum()
+        return pd.DataFrame({"open": close, "high": close * 1.01, "low": close * 0.99,
+                             "close": close, "volume": 1000.0}, index=idx)
+
+    histories = {"STOCK:AAA": series(1), "STOCK:BBB": series(2), "STOCK:CCC": series(3)}
+    svc = MagicMock()
+    svc.fetch_histories.side_effect = lambda uni, period="1y": {a: histories[a] for a in uni}
+    svc.history.side_effect = lambda raw, period="1y": histories.get(raw)
+
+    def broker():
+        b = MagicMock()
+        b.get_account.return_value = {"equity": 10000, "cash": 10000, "currency": "USD"}
+        b.get_positions.return_value = []
+        b.get_open_orders.return_value = []
+        return b
+
+    pc = {"max_positions": 1, "alloc_pct": 20}
+    from unittest.mock import patch
+    with patch.object(strategy_mod, "position_series",
+                      lambda df, **kw: pd.Series([1] * len(df), index=df.index)):
+        db = FakeDB()
+        # 1) bias défensif -> AUCUN achat malgré 3 candidats
+        ai.save_plan(db, {"bias": "defensif", "focus": [], "eviter": [], "note": ""})
+        b1 = broker()
+        assert trader.run_broker_cycle(b1, svc, list(histories), pc, {}, db) == []
+        assert not b1.submit_order.called
+        # 2) focus CCC + eviter AAA -> le seul slot va à CCC
+        ai.save_plan(db, {"bias": "agressif", "focus": ["STOCK:CCC"],
+                          "eviter": ["STOCK:AAA"], "note": ""})
+        b2 = broker()
+        ex = trader.run_broker_cycle(b2, svc, list(histories), pc, {}, db)
+        assert [e["asset"] for e in ex if e["side"] == "ACHAT"] == ["CCC"]
 
 
 def test_execute_orders_paper():

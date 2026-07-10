@@ -680,10 +680,14 @@ def _ia_status_text(db) -> str:
     sim_txt = ("🧠 *Simulation + IA* — /simuler ajoute l'avis du conseiller sur les résultats"
                if simm == "ia" else
                "⚙️ *Simulation seule* — /simuler sans appel à OpenAI")
+    plan_txt = ai.plan_summary(ai.current_plan(db))
+    plan_bloc = (f"🤝 *Plan 24h actif (guide le robot)* :\n{plan_txt}\n\n"
+                 if plan_txt else "")
     return (
         "🧠 *Conseiller IA (OpenAI)* — facultatif\n\n"
         f"Clé : {'✅' if ok else '❌ (/set OPENAI_API_KEY ta-clé)'} · Modèle : `{model}`\n"
         f"Consultation auto : {quota}\n\n"
+        f"{plan_bloc}"
         f"🤖 Mode trading : {live_txt}\n\n"
         f"🧪 Mode simulateur : {sim_txt}\n\n"
         "💬 *Le bouton « Demander un avis maintenant » est illimité* — il ne compte pas dans "
@@ -730,8 +734,16 @@ async def _ia_ask_and_send(chat_id, context, source: str = "manuel"):
         else:
             ai.record_call(db)
         db.log_event(chat_id, "ai_call", f"source={source}")
-        advice, orders = ai.parse_orders(raw_advice)
+        advice, orders, plan = ai.parse_orders(raw_advice)
         await msg.edit_text(f"🧠 *Avis du conseiller IA*\n\n{esc_md(advice)[:3700]}", parse_mode=MD)
+
+        # 🤝 Plan 24h : l'IA guide le cycle autonome (biais/priorités/interdits)
+        if plan:
+            ai.save_plan(db, plan)
+            db.log_event(chat_id, "ai_plan", f"bias={plan.get('bias')}")
+            await context.bot.send_message(
+                chat_id, "🤝 *Plan 24h transmis au robot* (appliqué à chaque cycle horaire)\n"
+                         + ai.plan_summary(plan), parse_mode=MD)
 
         # 🤖 Exécution automatique des ordres IA (si activée). Cible = Alpaca si branché,
         # sinon le compte fictif interne.

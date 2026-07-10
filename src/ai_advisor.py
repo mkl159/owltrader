@@ -44,14 +44,23 @@ SYSTEM_PROMPT = (
     "3) 🚀 MEILLEUR COUP COURT TERME — LA meilleure opportunité de gain rapide du moment "
     "(liste ou découverte), avec entrée/stop/objectif chiffrés.\n"
     "4) ⚡ STRATÉGIE DU JOUR — 2 phrases max, agressives et concrètes.\n"
+    "5) 🤝 PLAN 24H POUR LE ROBOT — tu es le CHEF DE DESK d'un robot de trading autonome qui "
+    "tourne TOUTES LES HEURES pendant les prochaines 24h (stratégie tendance+momentum, il "
+    "achète les plus fortes du S&P 500). Donne-lui ses consignes : biais général "
+    "(agressif = déployer / défensif = aucun nouvel achat), actifs à PRIVILÉGIER en tête de "
+    "ses achats, actifs à ÉVITER absolument, et une consigne d'une phrase.\n"
     "Sois tranché : évite les « peut-être ». Si le contexte est mauvais, dis clairement "
     "VENDRE ou RESTER LIQUIDE.\n"
     "Termine par : « ⚠️ Avis IA, pas un conseil financier. »\n"
     "PUIS, tout à la fin, ajoute un bloc JSON STRICT sur une seule ligne, au format exact :\n"
-    '{"orders":[{"action":"BUY","asset":"STOCK:AAPL"},{"action":"SELL","asset":"CRYPTO:BTC"}]}\n'
-    "Règles du JSON : uniquement les ordres à exécuter MAINTENANT (BUY/SELL), en utilisant "
-    "exactement les identifiants d'actifs fournis dans le contexte (ex. STOCK:AAPL). "
-    'Liste vide {"orders":[]} si aucun ordre.'
+    '{"orders":[{"action":"BUY","asset":"STOCK:AAPL"}],'
+    '"plan":{"bias":"agressif","focus":["STOCK:NVDA"],"eviter":["STOCK:TSLA"],'
+    '"note":"consigne d\'une phrase pour le robot"}}\n'
+    "Règles du JSON : orders = uniquement les ordres à exécuter MAINTENANT (BUY/SELL) ; "
+    "plan = tes consignes que le robot APPLIQUERA automatiquement à chaque cycle horaire "
+    "pendant 24h (bias: agressif|neutre|defensif ; focus/eviter: identifiants exacts "
+    "type STOCK:XXX ou CRYPTO:XXX, listes vides acceptées). "
+    'Format minimal si rien : {"orders":[],"plan":{"bias":"neutre","focus":[],"eviter":[],"note":""}}.'
 )
 
 
@@ -127,6 +136,27 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
         f"≈{pc.get('alloc_pct', 20)}% du capital par position (ajusté volatilité), "
         f"stop-loss automatique du bot à -{pc.get('stop_loss_pct', 25)}%."
     )
+    parts.append(
+        "TON RÔLE DE CHEF DE DESK: le robot autonome tourne toutes les heures (tendance+momentum "
+        "sur le S&P 500). TON plan 24h le pilote : bias defensif = il n'ouvre AUCUN nouvel achat ; "
+        "focus = il achète ces actifs EN PRIORITÉ ; eviter = il ne les achètera pas. "
+        f"Tes achats (orders) sont protégés {pc.get('ia_hold_days', 7)} jours : le robot ne peut "
+        "pas les revendre, TOI seul peux les vendre (ordre SELL) — gère-les activement."
+    )
+    try:
+        prev = current_plan(db)
+        if prev:
+            parts.append(
+                f"TON PLAN ACTUEL (émis {prev.get('ts', '?')[:16]}, à renouveler/ajuster): "
+                f"bias={prev.get('bias')}, focus={prev.get('focus')}, eviter={prev.get('eviter')}, "
+                f"note={prev.get('note')!r}"
+            )
+        mine = trader._ai_holdings(db, "alpaca") or trader._ai_holdings(db, f"paper_{chat_id}")
+        if mine:
+            parts.append("POSITIONS OUVERTES PAR TOI (protégées, à toi de les gérer/vendre): "
+                         + ", ".join(f"{s} (achat {d})" for s, d in mine.items()))
+    except Exception:  # noqa: BLE001
+        pass
 
     # Positions & compte
     acc, equity, holdings = trader.account_state(db, svc, chat_id)
@@ -228,17 +258,19 @@ def build_context(svc, db, chat_id: int, universe: list[str]) -> str:
     return "\n".join(parts) if parts else "Aucun contexte disponible."
 
 
-def parse_orders(text: str) -> tuple[str, list[dict]]:
-    """Extrait le bloc JSON d'ordres de la réponse IA.
+def parse_orders(text: str) -> tuple[str, list[dict], dict | None]:
+    """Extrait le bloc JSON (ordres + plan 24h) de la réponse IA.
 
-    Renvoie (texte_sans_le_json, [{"action": "BUY"/"SELL", "asset": "STOCK:AAPL"}, ...]).
-    Tolérant : si pas de JSON valide, renvoie le texte tel quel et une liste vide.
+    Renvoie (texte_sans_le_json, ordres, plan|None) où plan =
+    {"bias": "agressif|neutre|defensif", "focus": [...], "eviter": [...], "note": "..."}.
+    Tolérant : si pas de JSON valide, renvoie le texte tel quel, [] et None.
     """
     import json
     import re
-    matches = list(re.finditer(r'\{\s*"orders"\s*:\s*\[.*?\]\s*\}', text, re.S))
+    matches = list(re.finditer(
+        r'\{\s*"orders"\s*:\s*\[.*?\]\s*(?:,\s*"plan"\s*:\s*\{.*?\}\s*)?\}', text, re.S))
     if not matches:
-        return text.strip(), []
+        return text.strip(), [], None
     m = matches[-1]  # garde la DERNIÈRE occurrence (le bloc final)
     try:
         data = json.loads(m.group(0))
@@ -248,11 +280,62 @@ def parse_orders(text: str) -> tuple[str, list[dict]]:
             asset = str(o.get("asset", "")).upper().strip()
             if action in ("BUY", "SELL") and ":" in asset:
                 orders.append({"action": action, "asset": asset})
+        plan = None
+        p = data.get("plan")
+        if isinstance(p, dict):
+            bias = str(p.get("bias", "neutre")).lower()
+            plan = {
+                "bias": bias if bias in ("agressif", "neutre", "defensif") else "neutre",
+                "focus": [str(a).upper().strip() for a in p.get("focus", []) if ":" in str(a)],
+                "eviter": [str(a).upper().strip() for a in p.get("eviter", []) if ":" in str(a)],
+                "note": str(p.get("note", ""))[:300],
+            }
         clean = (text[:m.start()] + text[m.end():]).strip()
         clean = clean.replace("```json", "").replace("```", "").strip()
-        return clean, orders
+        return clean, orders, plan
     except Exception:  # noqa: BLE001
-        return text.strip(), []
+        return text.strip(), [], None
+
+
+# --- Plan de trade 24h : l'IA guide le cycle autonome (osmose stratège/exécutant) ---
+def save_plan(db, plan: dict):
+    """Enregistre le plan IA (avec horodatage) — le cycle autonome l'appliquera 24h."""
+    import json
+    plan = dict(plan)
+    plan["ts"] = datetime.now(timezone.utc).isoformat()
+    db.set_config("AI_PLAN", json.dumps(plan, ensure_ascii=False))
+
+
+def current_plan(db) -> dict | None:
+    """Plan IA encore valide (moins de 24h), sinon None."""
+    import json
+    from datetime import timedelta
+    raw = db.get_config("AI_PLAN") if db is not None else None
+    if not raw:
+        return None
+    try:
+        plan = json.loads(raw)
+        ts = datetime.fromisoformat(plan.get("ts", ""))
+        if datetime.now(timezone.utc) - ts > timedelta(hours=24):
+            return None
+        return plan
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def plan_summary(plan: dict | None) -> str:
+    """Résumé lisible du plan pour Telegram ('' si aucun plan actif)."""
+    if not plan:
+        return ""
+    ic = {"agressif": "🔥", "neutre": "⚖️", "defensif": "🛡️"}.get(plan.get("bias", ""), "⚖️")
+    out = [f"{ic} Biais : *{plan.get('bias', 'neutre')}*"]
+    if plan.get("focus"):
+        out.append("🎯 Privilégier : " + ", ".join(plan["focus"][:6]))
+    if plan.get("eviter"):
+        out.append("🚫 Éviter : " + ", ".join(plan["eviter"][:6]))
+    if plan.get("note"):
+        out.append(f"🗒️ « {plan['note']} »")
+    return "\n".join(out)
 
 
 def ask(context_text: str, question: str | None = None) -> str:

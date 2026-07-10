@@ -80,6 +80,20 @@ def ai_protected(db, scope: str, paper_cfg: dict) -> set[str]:
     return out
 
 
+def _plan_directives(db) -> tuple[str, set[str], set[str]]:
+    """Directives du plan IA 24h pour le cycle autonome : (bias, focus, eviter).
+
+    L'osmose IA/robot : le chef de desk (IA) fixe le cap, l'exécutant (cycle) l'applique
+    à chaque passage horaire. Sans plan actif : neutre, aucune contrainte.
+    """
+    from ..ai_advisor import current_plan
+    plan = current_plan(db)
+    if not plan:
+        return "neutre", set(), set()
+    return (plan.get("bias", "neutre"),
+            set(plan.get("focus", [])), set(plan.get("eviter", [])))
+
+
 def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> list[dict]:
     """Exécute un cycle de décision pour un compte. Renvoie la liste des trades effectués."""
     acc = db.paper_get(chat_id)
@@ -166,9 +180,15 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
         if mkt is not None and not market_ok_now(mkt):
             paused = True  # marché global baissier : on n'ouvre pas de position
 
+    # Plan IA 24h (osmose stratège/exécutant) : biais, priorités et interdits du chef de desk.
+    bias, focus, avoid = _plan_directives(db)
+    if bias == "defensif":
+        paused = True   # l'IA a demandé la prudence : aucun nouvel achat pendant 24h
+
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
-    cands = [a for a in universe if wants.get(a) and a not in held and a in prices]
+    cands = [a for a in universe
+             if wants.get(a) and a not in held and a in prices and a not in avoid]
     if amlb > 0:  # momentum absolu : on écarte les actifs en baisse sur ~6 mois
         def _abs_mom(a):
             df = hist.get(a)
@@ -178,6 +198,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
         cands = [a for a in cands if (_abs_mom(a) is not None and _abs_mom(a) >= ammin)]
     if rlb > 0:  # classe par momentum relatif : les plus forts d'abord
         cands.sort(key=lambda a: moms.get(a, -9e9), reverse=True)
+    if focus:   # les priorités du plan IA passent devant (ordre momentum conservé entre elles)
+        cands.sort(key=lambda a: 0 if a in focus else 1)
     for a in cands[: max(0, free)]:
         base = equity_now * alloc / 100.0
         if vt > 0 and a in vols:
@@ -423,9 +445,17 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             except Exception as e:  # noqa: BLE001
                 log.warning("Alpaca vente %s : %s", sym, e)
 
+    # Plan IA 24h (osmose stratège/exécutant) : biais, priorités et interdits du chef de desk.
+    bias, focus_raw, avoid_raw = _plan_directives(db)
+    focus = {to_alpaca_symbol(a) for a in focus_raw} - {None}
+    avoid = {to_alpaca_symbol(a) for a in avoid_raw} - {None}
+    if bias == "defensif":
+        paused = True   # l'IA a demandé la prudence : aucun nouvel achat pendant 24h
+
     # ACHATS : candidats voulus, filtrés momentum absolu, CLASSÉS par momentum relatif.
     free = 0 if paused else max_pos - len(positions)
-    cands = [s for s in wants if s not in positions and s not in pending and s in prices]
+    cands = [s for s in wants
+             if s not in positions and s not in pending and s in prices and s not in avoid]
     if amlb > 0:
         def _abs_mom(sym):
             df = hist.get(wants[sym])
@@ -435,6 +465,8 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
         cands = [s for s in cands if (_abs_mom(s) is not None and _abs_mom(s) >= ammin)]
     if rlb > 0:  # les plus fortes d'abord
         cands.sort(key=lambda s: moms.get(s, -9e9), reverse=True)
+    if focus:   # les priorités du plan IA passent devant (ordre momentum conservé entre elles)
+        cands.sort(key=lambda s: 0 if s in focus else 1)
 
     for sym in cands[: max(0, free)]:
         if cash < 5:
