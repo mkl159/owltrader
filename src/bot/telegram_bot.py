@@ -111,7 +111,8 @@ HELP = (
     "💼 *Portefeuille*\n"
     "• /ajouter `AAPL 10 180` — qté, prix d'achat\n"
     "• /portefeuille · /perf\n\n"
-    "🚨 *Urgence & reporting trading*\n"
+    "🎛️ *Cockpit & urgence*\n"
+    "• /cockpit — tableau de bord vivant (positions, P&L, plan IA, bouton actualiser)\n"
     "• /stopachats — suspendre tous les achats (ventes actives) · /reprendre\n"
     "• /toutvendre — liquider TOUTES les positions (avec confirmation)\n"
     "• /paractif — P&L réalisé par actif · /jours — gains/pertes par jour\n\n"
@@ -145,7 +146,8 @@ HELP_EN = (
     "• /alerte `AAPL 200` · /alertes · /univers · /sources\n\n"
     "👁️ *Watchlist* : /watch · /unwatch · /liste\n"
     "💼 *Portfolio* : /ajouter `AAPL 10 180` · /portefeuille · /perf\n\n"
-    "🚨 *Emergency & trading reports*\n"
+    "🎛️ *Cockpit & emergency*\n"
+    "• /cockpit — live trading dashboard (positions, P&L, AI plan, refresh button)\n"
     "• /pause — stop all buying (sells stay active) · /resume\n"
     "• /panic — liquidate ALL positions (with confirmation)\n"
     "• /performance — realized P&L per asset · /daily — daily P&L\n\n"
@@ -1636,6 +1638,89 @@ async def perf(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await _send_perf(update.effective_chat.id, context, update.message.reply_text)
 
 
+# --- 🎛️ Cockpit : carte de positions vivante (façon Maestro/Trojan) ---
+
+async def _cockpit_text(chat_id: int, context) -> str:
+    """Construit la carte cockpit : équity + sparkline + cartes de positions + plan IA."""
+    from datetime import datetime, timezone
+
+    from .. import ai_advisor as ai
+    from ..formatting import pnl_bar, sparkline
+    db, svc = _db(context), _svc(context)
+    dev = _paper_cfg().get("devise", "EUR")
+    lines = ["🦉 *Cockpit OwlTrader*"]
+
+    # Compte autonome interne
+    acc, equity, holdings = await asyncio.to_thread(trader.account_state, db, svc, chat_id)
+    if acc:
+        pnl = equity - acc["capital"]
+        pct = pnl / acc["capital"] * 100 if acc["capital"] else 0
+        ic = "🟢" if pnl >= 0 else "🔴"
+        curve = db.paper_equity_curve(chat_id)
+        spark = sparkline([e for _, e in curve[-30:]]) if len(curve) >= 2 else ""
+        lines += ["", f"🤖 *Autonome* : {equity:,.2f} {dev}  {ic} {pnl:+,.2f} ({pct:+.1f}%)"]
+        if spark:
+            lines.append(f"`{spark}` _30 j_")
+        for h in holdings[:8]:
+            p = h.get("pnl_pct")
+            bar = pnl_bar(p) if p is not None else ""
+            lines.append(f"  • {h['asset'].split(':')[-1]} : {h['value']:,.0f} {dev} "
+                         f"{bar} {p:+.1f}%" if p is not None else
+                         f"  • {h['asset'].split(':')[-1]} : {h['value']:,.0f} {dev}")
+        if not holdings:
+            lines.append("  _100 % liquide_")
+
+    # Alpaca (si connecté)
+    mode = db.get_config("ALPACA_AUTO")
+    if mode in ("paper", "live"):
+        try:
+            def _alp():
+                from ..brokers.alpaca import AlpacaBroker
+                b = AlpacaBroker(mode=mode)
+                return b.get_account(), b.get_positions()
+            alp_acc, alp_pos = await asyncio.to_thread(_alp)
+            tag = "🧪 PAPER" if mode == "paper" else "💸 RÉEL"
+            lines += ["", f"🦙 *Alpaca {tag}* : {alp_acc['equity']:,.2f} {alp_acc['currency']} "
+                          f"(cash {alp_acc['cash']:,.0f})"]
+            for p in alp_pos[:8]:
+                lines.append(f"  • {p['symbol']} : {p['market_value']:,.0f} "
+                             f"{pnl_bar(p['unrealized_plpc'])} {p['unrealized_plpc']:+.1f}%")
+            if not alp_pos:
+                lines.append("  _aucune position_")
+        except Exception:  # noqa: BLE001
+            lines += ["", "🦙 Alpaca : ⚠️ injoignable"]
+
+    # État du desk : pause + plan IA
+    lines.append("")
+    if trader.entries_paused(db):
+        lines.append("🛑 *Achats suspendus* (/reprendre)")
+    plan = ai.current_plan(db)
+    if plan:
+        ic = {"agressif": "🔥", "neutre": "⚖️", "defensif": "🛡️"}.get(plan.get("bias", ""), "⚖️")
+        lines.append(f"🤝 Plan IA : {ic} {plan.get('bias', 'neutre')}")
+    lines.append(f"_🕐 {datetime.now(timezone.utc).astimezone().strftime('%H:%M:%S')}_")
+    return "\n".join(lines)
+
+
+def _cockpit_keyboard(db) -> InlineKeyboardMarkup:
+    paused = trader.entries_paused(db)
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🔄 Actualiser", callback_data="ckpt:refresh"),
+         InlineKeyboardButton("📊 Bilan complet", callback_data="ckpt:bilan")],
+        [InlineKeyboardButton("▶️ Reprendre les achats" if paused else "🛑 Stopper les achats",
+                              callback_data="ckpt:pause")],
+        [InlineKeyboardButton("⬅️ Menu", callback_data="menu")],
+    ])
+
+
+async def cockpit(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """🎛️ /cockpit — tableau de bord vivant : tout l'état du desk en une carte."""
+    chat_id = update.effective_chat.id
+    msg = await update.message.reply_text("🎛️ Chargement du cockpit…")
+    txt = await _cockpit_text(chat_id, context)
+    await msg.edit_text(txt, parse_mode=MD, reply_markup=_cockpit_keyboard(_db(context)))
+
+
 # --- Commandes inspirées de freqtrade (bot Telegram de référence, 40k ⭐) ---
 
 async def stopachats(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1965,6 +2050,27 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append(f"• {p['symbol']} : {p['qty']:g}")
         return await q.edit_message_text("\n".join(lines), parse_mode=MD,
                                          reply_markup=back_button("brokers_menu"))
+    if data.startswith("ckpt:"):
+        sub = data.split(":", 1)[1]
+        if sub == "bilan":
+            await q.answer("📊 Bilan complet…")
+            mode = db.get_config("ALPACA_AUTO")
+            if mode in ("paper", "live"):
+                return await _alpaca_bilan(chat_id, context)
+            return await _send_bilan(chat_id, context)
+        if sub == "pause":
+            paused = trader.entries_paused(db)
+            db.set_config("TRADING_PAUSED", "0" if paused else "1")
+            db.log_event(chat_id, "pause", "reprise" if paused else "stopachats (cockpit)")
+            await q.answer("▶️ Trading repris" if paused else "🛑 Achats suspendus")
+        else:
+            await q.answer("🔄")
+        txt = await _cockpit_text(chat_id, context)
+        try:
+            return await q.edit_message_text(txt, parse_mode=MD,
+                                             reply_markup=_cockpit_keyboard(db))
+        except Exception:  # noqa: BLE001 (contenu identique : Telegram refuse l'édition)
+            return
     if data.startswith("sellall:"):
         if data.split(":", 1)[1] != "yes":
             return await q.edit_message_text("❌ Liquidation annulée — rien n'a été vendu.")
@@ -2386,6 +2492,7 @@ def build_application() -> Application:
     app.add_handler(CommandHandler("ajouter", ajouter))
     app.add_handler(CommandHandler("portefeuille", portefeuille))
     app.add_handler(CommandHandler("perf", perf))
+    app.add_handler(CommandHandler(["cockpit", "desk"], cockpit))
     # Commandes façon freqtrade : urgence + reporting
     app.add_handler(CommandHandler(["stopachats", "pause"], stopachats))
     app.add_handler(CommandHandler(["reprendre", "resume"], reprendre))

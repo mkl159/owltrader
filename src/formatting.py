@@ -391,3 +391,29 @@ def digest_block(symbol: str, a: Analysis) -> str:
     if a.signal:
         sig = f" — {a.signal.emoji} {a.signal.direction.value}"
     return f"• *{symbol}* : {_fmt_price(a.quote.price, a.quote.currency)}{pct}{sig}"
+
+
+# --- Visuels texte façon Maestro/Trojan (les bots Telegram les plus léchés) ---
+_SPARK_CHARS = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(values, width: int = 24) -> str:
+    """Mini-graphique unicode ▁▂▄▇█ d'une série de valeurs (dans un message texte)."""
+    vals = [float(v) for v in values if v == v]  # écarte les NaN
+    if len(vals) < 2:
+        return ""
+    if len(vals) > width:  # sous-échantillonne en gardant le dernier point
+        step = (len(vals) - 1) / (width - 1)
+        vals = [vals[round(i * step)] for i in range(width)]
+    lo, hi = min(vals), max(vals)
+    if hi - lo < 1e-12:
+        return _SPARK_CHARS[3] * len(vals)
+    return "".join(_SPARK_CHARS[round((v - lo) / (hi - lo) * 7)] for v in vals)
+
+
+def pnl_bar(pct: float, full: float = 10.0, slots: int = 5) -> str:
+    """Barre de gain/perte 🟩🟩⬜⬜⬜ : `full` % = barre pleine (défaut ±10 %)."""
+    n = min(slots, max(0, round(abs(pct) / full * slots)))
+    if pct >= 0:
+        return "🟩" * n + "⬜" * (slots - n)
+    return "🟥" * n + "⬜" * (slots - n)
