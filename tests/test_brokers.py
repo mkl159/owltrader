@@ -237,3 +237,48 @@ def test_ai_buy_protected_from_autonomous_cycle():
     trader.execute_orders_alpaca(
         broker3, svc, [{"action": "SELL", "asset": "STOCK:HOOD"}], {"alloc_pct": 20}, db)
     assert "HOOD" not in trader.ai_protected(db, "alpaca", {"ia_hold_days": 7})
+
+
+@pytest.mark.horaires_reels
+def test_market_open_now_horaires():
+    """Séances par actif : crypto 24/7, US 9h30-16h NY, Europe 9h-17h30 Paris, week-end fermé."""
+    from datetime import datetime, timezone
+
+    from src.paper.trader import market_open_now
+
+    # Mardi 14 juillet 2026, 18h00 UTC = 14h00 New York (séance US) / 20h00 Paris (fermé)
+    mardi_seance_us = datetime(2026, 7, 14, 18, 0, tzinfo=timezone.utc)
+    assert market_open_now("STOCK:AAPL", mardi_seance_us)
+    assert market_open_now("INDEX:^GSPC", mardi_seance_us)
+    assert not market_open_now("STOCK:MC.PA", mardi_seance_us)      # Paris fermé à 20h
+    # Mardi 10h00 UTC = 12h00 Paris (séance) / 6h00 New York (fermé)
+    mardi_matin = datetime(2026, 7, 14, 10, 0, tzinfo=timezone.utc)
+    assert market_open_now("STOCK:MC.PA", mardi_matin)
+    assert not market_open_now("STOCK:AAPL", mardi_matin)
+    # Samedi : tout fermé sauf crypto
+    samedi = datetime(2026, 7, 11, 18, 0, tzinfo=timezone.utc)
+    assert not market_open_now("STOCK:AAPL", samedi)
+    assert not market_open_now("STOCK:MC.PA", samedi)
+    assert not market_open_now("FX:EURUSD", samedi)
+    assert market_open_now("CRYPTO:BTC", samedi)
+
+
+def test_decision_df_ignore_bougie_du_jour():
+    """La bougie du jour (en formation) est écartée ; une bougie d'hier est gardée."""
+    from datetime import datetime, timedelta, timezone
+
+    import numpy as np
+    import pandas as pd
+
+    from src.paper.trader import decision_df
+
+    today = pd.Timestamp(datetime.now(timezone.utc).date(), tz="UTC")
+    idx = pd.date_range(end=today, periods=100, freq="D", tz="UTC")
+    df = pd.DataFrame({"close": np.linspace(100, 120, 100)}, index=idx)
+    out = decision_df(df)
+    assert len(out) == 99 and out.index[-1] < today          # bougie du jour écartée
+
+    hier = today - timedelta(days=1)
+    idx2 = pd.date_range(end=hier, periods=100, freq="D", tz="UTC")
+    df2 = pd.DataFrame({"close": np.linspace(100, 120, 100)}, index=idx2)
+    assert len(decision_df(df2)) == 100                       # historique clos : intact

@@ -17,6 +17,21 @@ def _series(trend: float, n: int = 400, seed: int = 0, start: float = 100.0) -> 
     )
 
 
+@pytest.fixture(autouse=True)
+def _market_toujours_ouvert(request, monkeypatch):
+    """Les tests de cycles ne doivent pas dépendre de l'heure d'exécution de la CI.
+
+    On fige « marché ouvert » partout, SAUF pour les tests marqués `horaires_reels`
+    qui testent justement la fonction market_open_now.
+    """
+    if "horaires_reels" in request.keywords:
+        yield
+        return
+    from src.paper import trader
+    monkeypatch.setattr(trader, "market_open_now", lambda raw, now=None: True)
+    yield
+
+
 @pytest.fixture
 def uptrend():
     return _series(trend=0.0015, seed=1)

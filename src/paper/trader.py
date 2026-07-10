@@ -80,6 +80,57 @@ def ai_protected(db, scope: str, paper_cfg: dict) -> set[str]:
     return out
 
 
+def decision_df(df):
+    """Ne décide que sur bougies CLÔTURÉES (équivalent `process_only_new_candles` de freqtrade).
+
+    La bougie du jour, encore en formation, bouge à chaque passage du cycle : un signal
+    peut s'allumer à 20h19 et s'éteindre à 20h29 (aller-retour constaté NVDA/TSLA).
+    Le backtest, lui, ne voit que des clôtures — le live doit faire pareil.
+    """
+    from datetime import datetime, timezone
+    if df is None or len(df) < 2:
+        return df
+    last = df.index[-1]
+    try:
+        d = last.tz_convert("UTC").date() if getattr(last, "tzinfo", None) is not None else last.date()
+    except Exception:  # noqa: BLE001
+        return df
+    return df.iloc[:-1] if d >= datetime.now(timezone.utc).date() else df
+
+
+def market_open_now(raw: str, now=None) -> bool:
+    """Le marché de CET actif est-il ouvert ? (crypto 24/7, actions selon leur bourse).
+
+    Anti-bagotement : hors séance les sources gratuites divergent (prix figés/incohérents)
+    -> achats le samedi revendus le dimanche constatés. Le backtest ne connaît que les
+    jours de bourse : le live n'a pas le droit de trader un marché fermé.
+    """
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from ..symbols import Asset
+    a = Asset.parse(raw)
+    if a.klass == "CRYPTO":
+        return True
+    now = now or datetime.now(timezone.utc)
+    if a.klass in ("FX", "COMMO"):
+        return now.weekday() < 5
+    european = "." in a.symbol or a.symbol in ("^FCHI", "^STOXX50E", "^GDAXI")
+    if european:
+        loc = now.astimezone(ZoneInfo("Europe/Paris"))
+        return loc.weekday() < 5 and (9, 0) <= (loc.hour, loc.minute) < (17, 30)
+    loc = now.astimezone(ZoneInfo("America/New_York"))
+    if loc.weekday() >= 5:
+        return False
+    try:
+        from ..seasonality import is_market_holiday
+        if is_market_holiday():
+            return False
+    except Exception:  # noqa: BLE001
+        pass
+    return (9, 30) <= (loc.hour, loc.minute) < (16, 0)
+
+
 def _plan_directives(db) -> tuple[str, set[str], set[str]]:
     """Directives du plan IA 24h pour le cycle autonome : (bias, focus, eviter).
 
@@ -122,14 +173,15 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
             last_close = float(df["close"].iloc[-1])
             if math.isnan(last_close) or last_close <= 0:
                 continue  # cours manquant : on ne décide/trade pas cet actif ce tour-ci
-            wants[a] = bool(position_series(df, **sp).iloc[-1])
-            prices[a] = last_close
+            ddf = decision_df(df)   # signaux sur bougies clôturées (anti-bagotement)
+            wants[a] = bool(position_series(ddf, **sp).iloc[-1])
+            prices[a] = last_close  # exécution au dernier cours connu
             if vt > 0:
-                v = float(df["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
+                v = float(ddf["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
                 if v == v and v > 0:
                     vols[a] = v
-            if rlb > 0 and len(df) > rlb:
-                m = float(df["close"].iloc[-1] / df["close"].iloc[-1 - rlb] - 1)
+            if rlb > 0 and len(ddf) > rlb:
+                m = float(ddf["close"].iloc[-1] / ddf["close"].iloc[-1 - rlb] - 1)
                 if m == m:
                     moms[a] = m
         except Exception:  # noqa: BLE001
@@ -147,8 +199,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
 
     # --- VENTES : la stratégie n'en veut plus OU stop-loss du risk manager ---
     for a, p in list(held.items()):
-        if a not in prices:
-            continue
+        if a not in prices or not market_open_now(a):
+            continue  # marché fermé : prix non fiables, aucun trade (comme le backtest)
         price = prices[a]
         stop_hit = sl > 0 and price <= p["entry_price"] * (1 - sl)
         if a in protected and not stop_hit:
@@ -188,7 +240,8 @@ def run_cycle(db, svc, chat_id: int, universe: list[str], paper_cfg: dict) -> li
     # --- ACHATS : on prend ce que la stratégie veut, dans la limite des slots/cash ---
     free = 0 if paused else max_pos - len(held)
     cands = [a for a in universe
-             if wants.get(a) and a not in held and a in prices and a not in avoid]
+             if wants.get(a) and a not in held and a in prices and a not in avoid
+             and market_open_now(a)]
     if amlb > 0:  # momentum absolu : on écarte les actifs en baisse sur ~6 mois
         def _abs_mom(a):
             df = hist.get(a)
@@ -406,15 +459,16 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             last = float(df["close"].iloc[-1])
             if math.isnan(last) or last <= 0:
                 continue
+            ddf = decision_df(df)   # signaux sur bougies clôturées (anti-bagotement)
             prices[sym] = last
-            if bool(position_series(df, **sp).iloc[-1]):
+            if bool(position_series(ddf, **sp).iloc[-1]):
                 wants[sym] = raw
             if vt > 0:
-                v = float(df["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
+                v = float(ddf["close"].pct_change().rolling(20).std().iloc[-1]) * (252 ** 0.5)
                 if v == v and v > 0:
                     vols[sym] = v
-            if rlb > 0 and len(df) > rlb:
-                m = float(df["close"].iloc[-1] / df["close"].iloc[-1 - rlb] - 1)
+            if rlb > 0 and len(ddf) > rlb:
+                m = float(ddf["close"].iloc[-1] / ddf["close"].iloc[-1 - rlb] - 1)
                 if m == m:
                     moms[sym] = m
         except Exception:  # noqa: BLE001
@@ -429,12 +483,18 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
             paused = True
 
     executed: list[dict] = []
+    # Alpaca = actions US + crypto : hors séance US, seule la crypto peut trader
+    # (un ordre posé marché fermé s'exécuterait des heures plus tard sur un signal périmé).
+    us_open = market_open_now("STOCK:SPY")
+
     # Positions ouvertes par l'IA : intouchables pendant ia_hold_days (anti-bagotement).
     protected = ai_protected(db, "alpaca", paper_cfg)
     # VENTES : positions détenues que la stratégie ne veut plus (et sans ordre en attente).
     for sym, p in positions.items():
         if sym in protected:
             continue  # position IA récente : seule l'IA décide de la vendre
+        if not us_open and "/" not in sym:
+            continue  # action US, marché fermé : on ne poste pas d'ordre à retardement
         if sym not in wants and sym not in pending:
             try:
                 broker.submit_order(sym, abs(p["qty"]), "sell")
@@ -455,7 +515,8 @@ def run_broker_cycle(broker, svc, universe: list[str], paper_cfg: dict, params: 
     # ACHATS : candidats voulus, filtrés momentum absolu, CLASSÉS par momentum relatif.
     free = 0 if paused else max_pos - len(positions)
     cands = [s for s in wants
-             if s not in positions and s not in pending and s in prices and s not in avoid]
+             if s not in positions and s not in pending and s in prices and s not in avoid
+             and (us_open or "/" in s)]
     if amlb > 0:
         def _abs_mom(sym):
             df = hist.get(wants[sym])

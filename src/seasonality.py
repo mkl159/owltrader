@@ -50,7 +50,8 @@ _BDAY = CustomBusinessDay(calendar=_CAL)
 
 def _to_date(d) -> date:
     if d is None:
-        return datetime.utcnow().date()
+        from datetime import timezone
+        return datetime.now(timezone.utc).date()
     if isinstance(d, datetime):
         return d.date()
     if isinstance(d, date):

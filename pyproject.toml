@@ -2,6 +2,7 @@
 pythonpath = ["."]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["horaires_reels: teste market_open_now sans le patch 'marché toujours ouvert'"]
 
 [tool.ruff]
 line-length = 110
